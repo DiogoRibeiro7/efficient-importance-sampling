@@ -1,13 +1,13 @@
 # Efficient Importance Sampling for Rare Events
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A complete implementation of efficient importance sampling techniques for estimating wrong exit probabilities in systems with combinatorially many rare regions, based on **Song & Fellouris (2025)**.
 
 ## Overview
 
 This package provides asymptotically efficient Monte Carlo methods for rare event simulation in high-dimensional settings where:
+
 - Events of interest are exponentially rare (probability ~ e^(-αb) as b → ∞)
 - The number of rare regions grows combinatorially with dimension
 - Traditional importance sampling becomes computationally infeasible
@@ -18,21 +18,24 @@ Instead of using exponentially many (2^d) mixture components, this implementatio
 
 ## Features
 
-### 1. **Multidimensional Siegmund Problem** (Section 4)
+### 1\. **Multidimensional Siegmund Problem** (Section 4)
+
 Estimates the probability of wrong exit when a multidimensional random walk with negative drift crosses boundaries.
 
 **Application**: Sequential testing with multiple endpoints, change-point detection
 
 **Complexity Reduction**: O(2^d) → O(d)
 
-### 2. **Gap Rule** (Section 5)
+### 2\. **Gap Rule** (Section 5)
+
 Estimates wrong selection probability in sequential multiple testing with gap-based stopping rules.
 
 **Application**: Clinical trials, A/B testing with multiple variants
 
 **Complexity Reduction**: O(2^d) → O(m(d-m))
 
-### 3. **Sum-Intersection Rule** (Section 6)
+### 3\. **Sum-Intersection Rule** (Section 6)
+
 Handles stopping rules based on sums of smallest coordinates with decreasing rearrangements.
 
 **Application**: Rank-based sequential tests, order statistics
@@ -42,6 +45,7 @@ Handles stopping rules based on sums of smallest coordinates with decreasing rea
 ## Mathematical Framework
 
 The implementation includes:
+
 - ✅ Cumulant generating functions (CGFs) and rate functions
 - ✅ KKT system solvers for optimal exponential tilts
 - ✅ Feasible mixture construction with theoretical guarantees
@@ -141,6 +145,7 @@ python efficient_importance_sampling.py
 ```
 
 This will run comprehensive examples for all three problems with:
+
 - Performance comparisons (feasible vs. full mixture)
 - Scaling analysis across dimensions
 - Timing benchmarks
@@ -163,9 +168,10 @@ where `Z_b` is the importance sampling estimator and `E_b` is the rare event.
 For a rare event `E_b = ∪_{A⊆[d]} W^A_b` (union of exponentially many regions):
 
 1. **Identify critical regions**: Compute optimal tilts β^A solving:
-   ```
-   minimize r_A subject to Λ(β^A) = 0, sign constraints
-   ```
+
+  ```
+  minimize r_A subject to Λ(β^A) = 0, sign constraints
+  ```
 
 2. **Strategic selection**: Choose O(poly(d)) components instead of O(2^d)
 
@@ -175,37 +181,43 @@ For a rare event `E_b = ∪_{A⊆[d]} W^A_b` (union of exponentially many region
 
 ## Performance
 
-| Dimension | Components (Feasible) | Components (Full) | Speedup |
-|-----------|----------------------|-------------------|---------|
-| d=2       | 4                    | 3                 | ~1x     |
-| d=4       | 8                    | 15                | ~10x    |
-| d=6       | 12                   | 63                | ~100x   |
-| d=8       | 16                   | 255               | ~1000x  |
+Dimension | Components (Feasible) | Components (Full) | Speedup
+--------- | --------------------- | ----------------- | -------
+d=2       | 4                     | 3                 | ~1x
+d=4       | 8                     | 15                | ~10x
+d=6       | 12                    | 63                | ~100x
+d=8       | 16                    | 255               | ~1000x
 
-*Speedup increases exponentially with dimension*
+_Speedup increases exponentially with dimension_
 
 ## API Reference
 
 ### Core Classes
 
 #### `CumulantFunction`
+
 Handles cumulant generating functions and rate functions for multivariate normal distributions.
 
 #### `RegionOptimizer`
+
 Solves KKT systems for optimal exponential tilts using Lagrange multipliers.
 
 #### `MultidimensionalSiegmund`
+
 Implements the multidimensional Siegmund problem with boundary crossings.
 
 #### `GapRule`
+
 Handles sequential multiple testing with gap-based stopping rules.
 
 #### `SumIntersectionRule`
+
 Implements sum-intersection stopping rules with order statistics.
 
 ### Data Structures
 
 #### `SimulationResult`
+
 ```python
 @dataclass
 class SimulationResult:
@@ -222,6 +234,7 @@ class SimulationResult:
 ### The Problem
 
 Estimating `P(E_b)` where:
+
 - Event `E_b` is the union of exponentially many rare regions
 - Each region `W^A` has escape rate `r_A`
 - Optimal tilt `β^A` for region `W^A` satisfies `Λ(β^A) = 0`
@@ -229,12 +242,14 @@ Estimating `P(E_b)` where:
 ### The Challenge
 
 Using all `2^d - 1` optimal tilts:
+
 - ✅ Achieves asymptotic efficiency
 - ❌ Computationally infeasible for d ≥ 20
 
 ### The Solution
 
 Carefully selected subset of O(poly(d)) tilts:
+
 - ✅ Maintains asymptotic efficiency
 - ✅ Polynomial computational complexity
 - ✅ Controlled variance through coverage guarantees
@@ -272,7 +287,7 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the <LICENSE> file for details.
 
 ## Acknowledgments
 
@@ -284,6 +299,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For questions or issues, please open an issue on GitHub or contact [dfr@esmad.ipp.pt]
 
----
+--------------------------------------------------------------------------------
 
 **Keywords**: importance sampling, rare events, Monte Carlo, sequential analysis, asymptotic efficiency, high-dimensional statistics, exponential tilting, multiple testing
