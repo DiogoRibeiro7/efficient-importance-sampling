@@ -36,7 +36,7 @@ class SimulationResult:
 class CumulantFunction:
     """Handles cumulant generating functions and their operations."""
 
-    def __init__(self, mean: np.ndarray, covariance: np.ndarray):
+    def __init__(self, mean: np.ndarray, covariance: np.ndarray) -> None:
         """
         Initialize for multivariate normal distribution.
 
@@ -85,12 +85,14 @@ class CumulantFunction:
 class RegionOptimizer:
     """Handles optimization problems for computing optimal tilts and rates."""
 
-    def __init__(self, cgf: CumulantFunction):
+    def __init__(self, cgf: CumulantFunction) -> None:
         self.cgf = cgf
         self.d = cgf.d
 
     def solve_kkt_system(
-        self, A_indices: List[int], constraints: Dict
+        self,
+        A_indices: List[int],
+        constraints: Dict[str, Dict[str, Union[int, float, bool]]],
     ) -> Tuple[np.ndarray, float]:
         """
         Solve KKT system for optimal tilt and rate.
@@ -103,7 +105,7 @@ class RegionOptimizer:
             (beta, rate): Optimal exponential tilt and minimal rate
         """
 
-        def objective_and_constraints(theta):
+        def objective_and_constraints(theta: np.ndarray) -> Tuple[float, float]:
             """Combined objective and constraint function."""
             # Constraint: Λ(θ) = 0
             constraint_val = self.cgf.Lambda(theta)
@@ -131,14 +133,14 @@ class RegionOptimizer:
             return obj, constraint_val
 
         # Use method of Lagrange multipliers with numerical optimization
-        def lagrangian(params):
+        def lagrangian(params: np.ndarray) -> float:
             theta = params[: self.d]
             lambda_0 = params[self.d]
 
             obj, constraint = objective_and_constraints(theta)
             return -(obj - lambda_0 * constraint)
 
-        def constraint_func(params):
+        def constraint_func(params: np.ndarray) -> float:
             theta = params[: self.d]
             return self.cgf.Lambda(theta)
 
@@ -233,7 +235,7 @@ class MultidimensionalSiegmund:
 
     def __init__(
         self, d: int, ell: float, u: float, mean: np.ndarray, covariance: np.ndarray
-    ):
+    ) -> None:
         """
         Initialize the multidimensional Siegmund problem.
 
@@ -316,11 +318,16 @@ class MultidimensionalSiegmund:
         additional_tilts = []
         for k in range(self.d):
             # Solve: max u*θ_k subject to Λ(θ) ≤ 0, θ_k ≥ 0, θ_{k'} = 0 for k' ≠ k
-            def objective(theta_k_val):
+            def objective(theta_k_val: Union[np.ndarray, float]) -> float:
+                value = (
+                    float(theta_k_val[0])
+                    if isinstance(theta_k_val, np.ndarray)
+                    else float(theta_k_val)
+                )
                 theta = np.zeros(self.d)
-                theta[k] = theta_k_val[0]
-                if self.cgf.Lambda(theta) <= 1e-10 and theta_k_val[0] >= 0:
-                    return -self.u * theta_k_val[0]
+                theta[k] = value
+                if self.cgf.Lambda(theta) <= 1e-10 and value >= 0:
+                    return -self.u * value
                 return 1e10
 
             result = opt.minimize_scalar(objective, bounds=(0, 10), method="bounded")
@@ -450,7 +457,7 @@ class GapRule:
     using a gap-based stopping rule.
     """
 
-    def __init__(self, d: int, m: int, mean: np.ndarray, covariance: np.ndarray):
+    def __init__(self, d: int, m: int, mean: np.ndarray, covariance: np.ndarray) -> None:
         """
         Initialize gap rule problem.
 
@@ -510,7 +517,7 @@ class GapRule:
         for ell in range(self.m):
             for ell_prime in range(self.m, self.d):
                 # Solve optimization problem (36)
-                def objective(params):
+                def objective(params: np.ndarray) -> float:
                     theta = np.zeros(self.d)
                     theta[ell] = -params[0]  # θ_ℓ ≤ 0
                     theta[ell_prime] = params[0]  # θ_ℓ' ≥ 0
@@ -544,7 +551,7 @@ class SumIntersectionRule:
     exceeds a threshold and want to estimate wrong decision probability.
     """
 
-    def __init__(self, d: int, L: int, mean: np.ndarray, covariance: np.ndarray):
+    def __init__(self, d: int, L: int, mean: np.ndarray, covariance: np.ndarray) -> None:
         """
         Initialize sum-intersection rule.
 
@@ -598,7 +605,7 @@ class SumIntersectionRule:
         return tilts, weights
 
 
-def run_comprehensive_example():
+def run_comprehensive_example() -> None:
     """
     Run comprehensive example demonstrating all three problems.
     """
