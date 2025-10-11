@@ -56,7 +56,7 @@ The implementation includes:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/efficient-importance-sampling.git
+git clone https://github.com/diogoribeiro7/efficient-importance-sampling.git
 cd efficient-importance-sampling
 
 # Install dependencies
@@ -188,7 +188,6 @@ d=4       | 8                     | 15                | ~10x
 d=6       | 12                    | 63                | ~100x
 d=8       | 16                    | 255               | ~1000x
 
-_Speedup increases exponentially with dimension_
 
 ## API Reference
 
@@ -261,8 +260,8 @@ If you use this code in your research, please cite:
 ```bibtex
 @article{song2025efficient,
   title={Efficient Importance Sampling for Rare Events with Combinatorially Many Regions},
-  author={Song, [First] and Fellouris, [Name]},
-  journal={[Journal Name]},
+  author={Song, Yanglei and Fellouris, Georgios},
+  journal={},
   year={2025}
 }
 ```
