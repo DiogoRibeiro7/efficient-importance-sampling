@@ -1,0 +1,1826 @@
+name: Auto-Generate Architecture Diagrams
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - '**.py'
+      - '**.js'
+      - '**.ts'
+      - '**.java'
+  schedule:
+    # Weekly diagram regeneration on Sunday at midnight
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      diagram_types:
+        description: 'Diagram types to generate (comma-separated: all,dependencies,classes,flow,database)'
+        required: false
+        default: 'all'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-diagrams:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            graphviz \
+            libgraphviz-dev \
+            pkg-config \
+            build-essential
+
+      - name: Install Python analysis tools
+        run: |
+          pip install --upgrade pip
+          pip install pydeps==1.12.20
+          pip install graphviz==0.20.1
+          pip install pylint==3.0.3
+          pip install ast-grep-py==0.15.1
+          pip install pipdeptree==2.13.1
+          pip install sqlalchemy
+          pip install "pygraphviz>=1.12,<2.0"
+          pip install eralchemy2
+          pip install pytest-cov
+          pip install radon
+          pip install coverage
+
+      - name: Install project dependencies
+        run: |
+          if [ -f requirements.txt ]; then 
+            pip install -r requirements.txt || echo "Some dependencies failed to install"
+          fi
+          if [ -f pyproject.toml ]; then 
+            pip install poetry && poetry install --no-root || echo "Poetry install had issues"
+          fi
+
+      - name: Create diagrams directory
+        run: |
+          mkdir -p docs/architecture
+          mkdir -p .architecture-temp
+
+      - name: Generate dependency graph
+        run: |
+          echo "Generating Python dependency graph..."
+          
+          # Find main package directory
+          MAIN_PACKAGE=$(find . -type f -name "__init__.py" | head -1 | xargs dirname)
+          
+          if [ -n "$MAIN_PACKAGE" ]; then
+            PACKAGE_NAME=$(basename "$MAIN_PACKAGE")
+            
+            # Generate dependency graph with pydeps
+            pydeps "$PACKAGE_NAME" \
+              --max-bacon 3 \
+              --cluster \
+              --noshow \
+              --keep-target-cluster \
+              -o docs/architecture/dependency-graph.svg \
+              -T svg || echo "Pydeps generation failed, continuing..."
+            
+            pydeps "$PACKAGE_NAME" \
+              --max-bacon 3 \
+              --cluster \
+              --noshow \
+              --keep-target-cluster \
+              -o docs/architecture/dependency-graph.png \
+              -T png || echo "PNG generation failed, continuing..."
+          fi
+          
+          # Generate pip dependency tree
+          if command -v pipdeptree &> /dev/null; then
+            pipdeptree --graph-output svg > docs/architecture/pip-dependency-tree.svg || echo "Pipdeptree failed"
+            pipdeptree --graph-output png > docs/architecture/pip-dependency-tree.png || echo "PNG pipdeptree failed"
+          fi
+
+      - name: Generate class diagrams
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+            
+            console.log('Generating class diagram from Python code...');
+            
+            // Find all Python files
+            function findPythonFiles(dir, fileList = []) {
+              const files = fs.readdirSync(dir);
+              
+              files.forEach(file => {
+                const filePath = path.join(dir, file);
+                const stat = fs.statSync(filePath);
+                
+                if (stat.isDirectory() && !file.startsWith('.') && file !== 'node_modules' && file !== 'venv' && file !== '__pycache__') {
+                  findPythonFiles(filePath, fileList);
+                } else if (file.endsWith('.py')) {
+                  fileList.push(filePath);
+                }
+              });
+              
+              return fileList;
+            }
+            
+            // Parse Python AST to extract classes and methods
+            function parseClassStructure(pythonFiles) {
+              const classes = [];
+              
+              for (const file of pythonFiles.slice(0, 50)) { // Limit to prevent overwhelming diagrams
+                try {
+                  const content = fs.readFileSync(file, 'utf8');
+                  const lines = content.split('\n');
+                  
+                  let currentClass = null;
+                  
+                  for (const line of lines) {
+                    // Match class definitions
+                    const classMatch = line.match(/^class\s+(\w+)(\(([^)]+)\))?:/);
+                    if (classMatch) {
+                      currentClass = {
+                        name: classMatch[1],
+                        file: path.relative('.', file),
+                        parent: classMatch[3] || null,
+                        methods: [],
+                        attributes: []
+                      };
+                      classes.push(currentClass);
+                      continue;
+                    }
+                    
+                    // Match method definitions
+                    if (currentClass) {
+                      const methodMatch = line.match(/^\s+def\s+(\w+)\s*\(/);
+                      if (methodMatch && !methodMatch[1].startsWith('_')) {
+                        currentClass.methods.push(methodMatch[1]);
+                      }
+                      
+                      // Match attribute assignments in __init__
+                      const attrMatch = line.match(/^\s+self\.(\w+)\s*=/);
+                      if (attrMatch) {
+                        currentClass.attributes.push(attrMatch[1]);
+                      }
+                    }
+                  }
+                } catch (error) {
+                  console.log(`Error parsing ${file}: ${error.message}`);
+                }
+              }
+              
+              return classes;
+            }
+            
+            // Generate Mermaid class diagram
+            function generateMermaidClassDiagram(classes) {
+              let mermaid = 'classDiagram\n';
+              
+              // Define classes
+              for (const cls of classes) {
+                mermaid += `  class ${cls.name} {\n`;
+                
+                // Add attributes
+                for (const attr of cls.attributes.slice(0, 5)) {
+                  mermaid += `    +${attr}\n`;
+                }
+                
+                // Add methods
+                for (const method of cls.methods.slice(0, 8)) {
+                  mermaid += `    +${method}()\n`;
+                }
+                
+                mermaid += '  }\n\n';
+              }
+              
+              // Define relationships
+              for (const cls of classes) {
+                if (cls.parent && cls.parent !== 'object') {
+                  const parentClass = classes.find(c => c.name === cls.parent);
+                  if (parentClass) {
+                    mermaid += `  ${cls.parent} <|-- ${cls.name}\n`;
+                  }
+                }
+              }
+              
+              return mermaid;
+            }
+            
+            // Generate DOT format for Graphviz
+            function generateDotClassDiagram(classes) {
+              let dot = 'digraph Classes {\n';
+              dot += '  rankdir=BT;\n';
+              dot += '  node [shape=record, style=filled, fillcolor=lightblue];\n\n';
+              
+              // Define nodes
+              for (const cls of classes) {
+                const methods = cls.methods.slice(0, 5).join('\\l');
+                const attrs = cls.attributes.slice(0, 5).join('\\l');
+                
+                let label = `{${cls.name}|`;
+                if (attrs) label += `${attrs}\\l|`;
+                if (methods) label += `${methods}\\l`;
+                label += '}';
+                
+                dot += `  "${cls.name}" [label="${label}"];\n`;
+              }
+              
+              dot += '\n';
+              
+              // Define edges
+              for (const cls of classes) {
+                if (cls.parent && cls.parent !== 'object') {
+                  dot += `  "${cls.name}" -> "${cls.parent}" [arrowhead=empty];\n`;
+                }
+              }
+              
+              dot += '}\n';
+              return dot;
+            }
+            
+            try {
+              const pythonFiles = findPythonFiles('.');
+              console.log(`Found ${pythonFiles.length} Python files`);
+              
+              const classes = parseClassStructure(pythonFiles);
+              console.log(`Parsed ${classes.length} classes`);
+              
+              if (classes.length > 0) {
+                // Generate Mermaid diagram
+                const mermaidDiagram = generateMermaidClassDiagram(classes);
+                fs.writeFileSync('docs/architecture/class-diagram.mmd', mermaidDiagram);
+                
+                // Generate DOT diagram
+                const dotDiagram = generateDotClassDiagram(classes);
+                fs.writeFileSync('.architecture-temp/class-diagram.dot', dotDiagram);
+                
+                // Convert DOT to SVG using Graphviz
+                try {
+                  execSync('dot -Tsvg .architecture-temp/class-diagram.dot -o docs/architecture/class-diagram.svg');
+                  execSync('dot -Tpng .architecture-temp/class-diagram.dot -o docs/architecture/class-diagram.png');
+                  console.log('Class diagrams generated successfully');
+                } catch (error) {
+                  console.log('Graphviz conversion failed:', error.message);
+                }
+              }
+            } catch (error) {
+              console.error('Error generating class diagram:', error);
+            }
+
+      - name: Generate module dependency diagram
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+            
+            console.log('Generating module dependency diagram...');
+            
+            function findModules(dir, modules = new Map()) {
+              const files = fs.readdirSync(dir);
+              
+              files.forEach(file => {
+                const filePath = path.join(dir, file);
+                const stat = fs.statSync(filePath);
+                
+                if (stat.isDirectory() && !file.startsWith('.') && file !== 'node_modules' && file !== 'venv') {
+                  // Check if it's a Python package
+                  const initPath = path.join(filePath, '__init__.py');
+                  if (fs.existsSync(initPath)) {
+                    modules.set(file, { name: file, path: filePath, imports: [] });
+                  }
+                  findModules(filePath, modules);
+                }
+              });
+              
+              return modules;
+            }
+            
+            function analyzeImports(moduleName, modulePath, allModules) {
+              const imports = new Set();
+              
+              // Read all Python files in the module
+              function readPythonFiles(dir) {
+                const files = fs.readdirSync(dir);
+                
+                files.forEach(file => {
+                  const filePath = path.join(dir, file);
+                  const stat = fs.statSync(filePath);
+                  
+                  if (stat.isDirectory() && !file.startsWith('.')) {
+                    readPythonFiles(filePath);
+                  } else if (file.endsWith('.py')) {
+                    try {
+                      const content = fs.readFileSync(filePath, 'utf8');
+                      const lines = content.split('\n');
+                      
+                      for (const line of lines) {
+                        // Match various import patterns
+                        const importMatch = line.match(/^(?:from|import)\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+                        if (importMatch) {
+                          const importedModule = importMatch[1];
+                          if (allModules.has(importedModule) && importedModule !== moduleName) {
+                            imports.add(importedModule);
+                          }
+                        }
+                      }
+                    } catch (error) {
+                      console.log(`Error reading ${filePath}: ${error.message}`);
+                    }
+                  }
+                });
+              }
+              
+              readPythonFiles(modulePath);
+              return Array.from(imports);
+            }
+            
+            function generateModuleDiagram(modules) {
+              let dot = 'digraph Modules {\n';
+              dot += '  rankdir=LR;\n';
+              dot += '  node [shape=box, style="rounded,filled", fillcolor=lightgreen];\n\n';
+              
+              // Add nodes
+              for (const [name, module] of modules) {
+                dot += `  "${name}";\n`;
+              }
+              
+              dot += '\n';
+              
+              // Add edges
+              for (const [name, module] of modules) {
+                for (const imp of module.imports) {
+                  dot += `  "${name}" -> "${imp}";\n`;
+                }
+              }
+              
+              dot += '}\n';
+              return dot;
+            }
+            
+            function generateMermaidModuleDiagram(modules) {
+              let mermaid = 'graph LR\n';
+              
+              for (const [name, module] of modules) {
+                for (const imp of module.imports) {
+                  mermaid += `  ${name} --> ${imp}\n`;
+                }
+              }
+              
+              return mermaid;
+            }
+            
+            try {
+              const modules = findModules('.');
+              console.log(`Found ${modules.size} modules`);
+              
+              // Analyze imports for each module
+              for (const [name, module] of modules) {
+                module.imports = analyzeImports(name, module.path, modules);
+              }
+              
+              if (modules.size > 0) {
+                const dotDiagram = generateModuleDiagram(modules);
+                fs.writeFileSync('.architecture-temp/module-diagram.dot', dotDiagram);
+                
+                const mermaidDiagram = generateMermaidModuleDiagram(modules);
+                fs.writeFileSync('docs/architecture/module-diagram.mmd', mermaidDiagram);
+                
+                try {
+                  execSync('dot -Tsvg .architecture-temp/module-diagram.dot -o docs/architecture/module-diagram.svg');
+                  execSync('dot -Tpng .architecture-temp/module-diagram.dot -o docs/architecture/module-diagram.png');
+                  console.log('Module diagrams generated successfully');
+                } catch (error) {
+                  console.log('Graphviz conversion failed:', error.message);
+                }
+              }
+            } catch (error) {
+              console.error('Error generating module diagram:', error);
+            }
+
+      - name: Generate database ER diagram
+        run: |
+          echo "Generating database ER diagram..."
+          
+          # Search for SQLAlchemy models
+          MODELS_FILE=$(find . -name "models.py" -o -name "model.py" | head -1)
+          
+          if [ -n "$MODELS_FILE" ]; then
+            # Try to generate ER diagram from SQLAlchemy models
+            python -c "
+          try:
+              import sys
+              import os
+              from eralchemy2 import render_er
+              
+              # Add project to path
+              sys.path.insert(0, os.getcwd())
+              
+              # Try to find database URL or models
+              models_file = '${MODELS_FILE}'
+              
+              # Generate ER diagram
+              render_er('sqlite:///temp.db', 'docs/architecture/database-er.svg')
+              render_er('sqlite:///temp.db', 'docs/architecture/database-er.png')
+              print('Database ER diagram generated')
+          except Exception as e:
+              print(f'Could not generate DB diagram: {e}')
+          " || echo "ER diagram generation skipped"
+          fi
+
+      - name: Generate architecture overview
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+            
+            console.log('Generating architecture overview...');
+            
+            // Analyze project structure
+            function analyzeProjectStructure() {
+              const structure = {
+                directories: [],
+                pythonFiles: 0,
+                testFiles: 0,
+                configFiles: 0,
+                hasAPI: false,
+                hasDatabase: false,
+                hasFrontend: false,
+                frameworks: []
+              };
+              
+              function scanDirectory(dir, depth = 0) {
+                if (depth > 3) return;
+                
+                try {
+                  const files = fs.readdirSync(dir);
+                  
+                  files.forEach(file => {
+                    if (file.startsWith('.')) return;
+                    
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    
+                    if (stat.isDirectory()) {
+                      if (['venv', 'node_modules', '__pycache__', '.git'].includes(file)) return;
+                      
+                      structure.directories.push(file);
+                      
+                      if (file === 'tests' || file === 'test') {
+                        const testFiles = fs.readdirSync(filePath).filter(f => f.endsWith('.py'));
+                        structure.testFiles += testFiles.length;
+                      }
+                      
+                      scanDirectory(filePath, depth + 1);
+                    } else if (file.endsWith('.py')) {
+                      structure.pythonFiles++;
+                      
+                      // Check for frameworks and patterns
+                      try {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        
+                        if (content.includes('from flask import') || content.includes('import flask')) {
+                          if (!structure.frameworks.includes('Flask')) structure.frameworks.push('Flask');
+                          structure.hasAPI = true;
+                        }
+                        if (content.includes('from fastapi import') || content.includes('import fastapi')) {
+                          if (!structure.frameworks.includes('FastAPI')) structure.frameworks.push('FastAPI');
+                          structure.hasAPI = true;
+                        }
+                        if (content.includes('from django') || content.includes('import django')) {
+                          if (!structure.frameworks.includes('Django')) structure.frameworks.push('Django');
+                          structure.hasAPI = true;
+                        }
+                        if (content.includes('sqlalchemy') || content.includes('SQLAlchemy')) {
+                          structure.hasDatabase = true;
+                        }
+                      } catch (err) {}
+                    } else if (file.endsWith('.js') || file.endsWith('.jsx') || file.endsWith('.ts') || file.endsWith('.tsx')) {
+                      structure.hasFrontend = true;
+                    } else if (['requirements.txt', 'pyproject.toml', 'setup.py', 'Dockerfile'].includes(file)) {
+                      structure.configFiles++;
+                    }
+                  });
+                } catch (err) {}
+              }
+              
+              scanDirectory('.');
+              return structure;
+            }
+            
+            // Generate high-level architecture diagram
+            function generateArchitectureDiagram(structure) {
+              let mermaid = 'graph TB\n';
+              mermaid += '  %% High-Level Architecture Overview\n\n';
+              
+              // Add components based on project structure
+              if (structure.hasFrontend) {
+                mermaid += '  Frontend[Frontend Layer]\n';
+                mermaid += '  style Frontend fill:#e1f5ff\n\n';
+              }
+              
+              if (structure.hasAPI) {
+                const framework = structure.frameworks[0] || 'API';
+                mermaid += `  API[${framework} API Layer]\n`;
+                mermaid += '  style API fill:#fff4e6\n\n';
+              }
+              
+              mermaid += '  Business[Business Logic Layer]\n';
+              mermaid += '  style Business fill:#f3e5f5\n\n';
+              
+              if (structure.hasDatabase) {
+                mermaid += '  Database[(Database Layer)]\n';
+                mermaid += '  style Database fill:#e8f5e9\n\n';
+              }
+              
+              // Add connections
+              if (structure.hasFrontend && structure.hasAPI) {
+                mermaid += '  Frontend --> API\n';
+              }
+              if (structure.hasAPI) {
+                mermaid += '  API --> Business\n';
+              }
+              if (structure.hasDatabase) {
+                mermaid += '  Business --> Database\n';
+              }
+              
+              return mermaid;
+            }
+            
+            // Generate README
+            function generateReadme(structure) {
+              let readme = '# Architecture Documentation\n\n';
+              readme += '*Auto-generated on ' + new Date().toISOString().split('T')[0] + '*\n\n';
+              
+              readme += '## Project Overview\n\n';
+              readme += `- **Python Files:** ${structure.pythonFiles}\n`;
+              readme += `- **Test Files:** ${structure.testFiles}\n`;
+              readme += `- **Frameworks:** ${structure.frameworks.join(', ') || 'None detected'}\n\n`;
+              
+              readme += '## Architecture Diagrams\n\n';
+              readme += '### High-Level Architecture\n';
+              readme += '![Architecture Overview](architecture-overview.svg)\n\n';
+              
+              readme += '### Module Dependencies\n';
+              readme += '![Module Dependencies](module-diagram.svg)\n\n';
+              
+              readme += '### Class Structure\n';
+              readme += '![Class Diagram](class-diagram.svg)\n\n';
+              
+              readme += '### Package Dependencies\n';
+              readme += '![Dependency Graph](dependency-graph.svg)\n\n';
+              
+              if (fs.existsSync('docs/architecture/database-er.svg')) {
+                readme += '### Database Schema\n';
+                readme += '![Database ER Diagram](database-er.svg)\n\n';
+              }
+              
+              readme += '## Key Components\n\n';
+              if (structure.directories.length > 0) {
+                readme += 'Main directories:\n';
+                structure.directories.slice(0, 10).forEach(dir => {
+                  readme += `- \`${dir}/\`\n`;
+                });
+              }
+              
+              return readme;
+            }
+            
+            try {
+              const structure = analyzeProjectStructure();
+              console.log('Project structure analyzed:', JSON.stringify(structure, null, 2));
+              
+              // Generate architecture overview diagram
+              const archDiagram = generateArchitectureDiagram(structure);
+              fs.writeFileSync('docs/architecture/architecture-overview.mmd', archDiagram);
+              fs.writeFileSync('.architecture-temp/architecture-overview.mmd', archDiagram);
+              
+              // Convert to SVG using mermaid-cli (if available) or save as .mmd for GitHub rendering
+              try {
+                // GitHub renders .mmd files natively in some contexts
+                console.log('Architecture overview saved as Mermaid file');
+              } catch (err) {
+                console.log('Could not convert Mermaid to image:', err.message);
+              }
+              
+              // Generate README
+              const readme = generateReadme(structure);
+              fs.writeFileSync('docs/architecture/README.md', readme);
+              
+              console.log('Architecture documentation generated');
+            } catch (error) {
+              console.error('Error generating architecture overview:', error);
+            }
+
+      - name: Commit and push diagrams
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add docs/architecture/
+          
+          # Check if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "docs: Update architecture diagrams [skip ci]"
+            git push
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate API endpoint map
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+            
+            console.log('Generating API endpoint map...');
+            
+            function findAPIRoutes() {
+              const routes = {
+                flask: [],
+                fastapi: [],
+                django: []
+              };
+              
+              function scanForRoutes(dir) {
+                try {
+                  const files = fs.readdirSync(dir);
+                  
+                  files.forEach(file => {
+                    if (file.startsWith('.')) return;
+                    
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    
+                    if (stat.isDirectory() && !['venv', 'node_modules', '__pycache__'].includes(file)) {
+                      scanForRoutes(filePath);
+                    } else if (file.endsWith('.py')) {
+                      try {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        const lines = content.split('\n');
+                        
+                        for (let i = 0; i < lines.length; i++) {
+                          const line = lines[i];
+                          
+                          // Flask routes
+                          const flaskRoute = line.match(/@app\.route\(['"]([^'"]+)['"]\s*,?\s*methods=\[([^\]]+)\]|@app\.route\(['"]([^'"]+)['"]\)/);
+                          if (flaskRoute) {
+                            const endpoint = flaskRoute[1] || flaskRoute[3];
+                            const methods = flaskRoute[2] || 'GET';
+                            
+                            // Get function name from next line
+                            let funcName = '';
+                            if (i + 1 < lines.length) {
+                              const funcMatch = lines[i + 1].match(/def\s+(\w+)/);
+                              if (funcMatch) funcName = funcMatch[1];
+                            }
+                            
+                            routes.flask.push({
+                              endpoint: endpoint,
+                              methods: methods.replace(/['"]/g, '').split(',').map(m => m.trim()),
+                              handler: funcName,
+                              file: path.relative('.', filePath)
+                            });
+                          }
+                          
+                          // FastAPI routes
+                          const fastAPIRoute = line.match(/@app\.(get|post|put|delete|patch)\(['"]([^'"]+)['"]\)/);
+                          if (fastAPIRoute) {
+                            const method = fastAPIRoute[1].toUpperCase();
+                            const endpoint = fastAPIRoute[2];
+                            
+                            let funcName = '';
+                            if (i + 1 < lines.length) {
+                              const funcMatch = lines[i + 1].match(/(?:async\s+)?def\s+(\w+)/);
+                              if (funcMatch) funcName = funcMatch[1];
+                            }
+                            
+                            routes.fastapi.push({
+                              endpoint: endpoint,
+                              method: method,
+                              handler: funcName,
+                              file: path.relative('.', filePath)
+                            });
+                          }
+                          
+                          // Django URLs
+                          const djangoPath = line.match(/path\(['"]([^'"]+)['"],\s*(\w+)/);
+                          if (djangoPath) {
+                            routes.django.push({
+                              endpoint: djangoPath[1],
+                              handler: djangoPath[2],
+                              file: path.relative('.', filePath)
+                            });
+                          }
+                        }
+                      } catch (err) {
+                        console.log(`Error reading ${filePath}: ${err.message}`);
+                      }
+                    }
+                  });
+                } catch (err) {
+                  console.log(`Error scanning ${dir}: ${err.message}`);
+                }
+              }
+              
+              scanForRoutes('.');
+              return routes;
+            }
+            
+            function generateAPIMapMermaid(routes) {
+              let mermaid = 'graph LR\n';
+              mermaid += '  Client[Client/Frontend]\n';
+              mermaid += '  style Client fill:#e1f5ff\n\n';
+              
+              let hasRoutes = false;
+              
+              // Flask routes
+              if (routes.flask.length > 0) {
+                hasRoutes = true;
+                mermaid += '  subgraph Flask API\n';
+                routes.flask.forEach((route, idx) => {
+                  const nodeId = `flask_${idx}`;
+                  const methods = route.methods.join(',');
+                  mermaid += `    ${nodeId}["${methods} ${route.endpoint}"]\n`;
+                  mermaid += `    Client -->|${methods}| ${nodeId}\n`;
+                });
+                mermaid += '  end\n\n';
+              }
+              
+              // FastAPI routes
+              if (routes.fastapi.length > 0) {
+                hasRoutes = true;
+                mermaid += '  subgraph FastAPI\n';
+                routes.fastapi.forEach((route, idx) => {
+                  const nodeId = `fastapi_${idx}`;
+                  mermaid += `    ${nodeId}["${route.method} ${route.endpoint}"]\n`;
+                  mermaid += `    Client -->|${route.method}| ${nodeId}\n`;
+                });
+                mermaid += '  end\n\n';
+              }
+              
+              // Django routes
+              if (routes.django.length > 0) {
+                hasRoutes = true;
+                mermaid += '  subgraph Django URLs\n';
+                routes.django.forEach((route, idx) => {
+                  const nodeId = `django_${idx}`;
+                  mermaid += `    ${nodeId}["${route.endpoint}"]\n`;
+                  mermaid += `    Client --> ${nodeId}\n`;
+                });
+                mermaid += '  end\n\n';
+              }
+              
+              return hasRoutes ? mermaid : null;
+            }
+            
+            function generateAPIDocumentation(routes) {
+              let doc = '# API Endpoints\n\n';
+              doc += '*Auto-generated API endpoint documentation*\n\n';
+              
+              let hasRoutes = false;
+              
+              if (routes.flask.length > 0) {
+                hasRoutes = true;
+                doc += '## Flask Routes\n\n';
+                doc += '| Method(s) | Endpoint | Handler | File |\n';
+                doc += '|-----------|----------|---------|------|\n';
+                routes.flask.forEach(route => {
+                  doc += `| ${route.methods.join(', ')} | \`${route.endpoint}\` | ${route.handler} | ${route.file} |\n`;
+                });
+                doc += '\n';
+              }
+              
+              if (routes.fastapi.length > 0) {
+                hasRoutes = true;
+                doc += '## FastAPI Endpoints\n\n';
+                doc += '| Method | Endpoint | Handler | File |\n';
+                doc += '|--------|----------|---------|------|\n';
+                routes.fastapi.forEach(route => {
+                  doc += `| ${route.method} | \`${route.endpoint}\` | ${route.handler} | ${route.file} |\n`;
+                });
+                doc += '\n';
+              }
+              
+              if (routes.django.length > 0) {
+                hasRoutes = true;
+                doc += '## Django URLs\n\n';
+                doc += '| Path | View | File |\n';
+                doc += '|------|------|------|\n';
+                routes.django.forEach(route => {
+                  doc += `| \`${route.endpoint}\` | ${route.handler} | ${route.file} |\n`;
+                });
+                doc += '\n';
+              }
+              
+              return hasRoutes ? doc : null;
+            }
+            
+            try {
+              const routes = findAPIRoutes();
+              const totalRoutes = routes.flask.length + routes.fastapi.length + routes.django.length;
+              
+              console.log(`Found ${totalRoutes} API endpoints`);
+              
+              if (totalRoutes > 0) {
+                const apiMap = generateAPIMapMermaid(routes);
+                if (apiMap) {
+                  fs.writeFileSync('docs/architecture/api-map.mmd', apiMap);
+                  console.log('API map diagram generated');
+                }
+                
+                const apiDocs = generateAPIDocumentation(routes);
+                if (apiDocs) {
+                  fs.writeFileSync('docs/architecture/API_ENDPOINTS.md', apiDocs);
+                  console.log('API documentation generated');
+                }
+              } else {
+                console.log('No API endpoints found');
+              }
+            } catch (error) {
+              console.error('Error generating API map:', error);
+            }
+
+      - name: Generate data flow diagrams
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            console.log('Generating data flow diagrams...');
+            
+            function analyzeDataFlow() {
+              const flows = [];
+              
+              function scanForDataFlow(dir) {
+                try {
+                  const files = fs.readdirSync(dir);
+                  
+                  files.forEach(file => {
+                    if (file.startsWith('.')) return;
+                    
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    
+                    if (stat.isDirectory() && !['venv', 'node_modules', '__pycache__'].includes(file)) {
+                      scanForDataFlow(filePath);
+                    } else if (file.endsWith('.py')) {
+                      try {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        
+                        // Look for common data flow patterns
+                        const patterns = [
+                          { regex: /def\s+(\w+).*?->.*?(\w+):/, type: 'function_return' },
+                          { regex: /\.query\(([^)]+)\)/, type: 'database_query' },
+                          { regex: /\.filter\(([^)]+)\)/, type: 'data_filter' },
+                          { regex: /requests\.(get|post)\(['"]([^'"]+)['"]/, type: 'api_call' },
+                          { regex: /\.save\(\)/, type: 'data_persist' },
+                          { regex: /\.serialize\(\)/, type: 'data_transform' }
+                        ];
+                        
+                        patterns.forEach(pattern => {
+                          const matches = content.match(new RegExp(pattern.regex, 'g'));
+                          if (matches && matches.length > 0) {
+                            flows.push({
+                              file: path.relative('.', filePath),
+                              type: pattern.type,
+                              count: matches.length
+                            });
+                          }
+                        });
+                      } catch (err) {}
+                    }
+                  });
+                } catch (err) {}
+              }
+              
+              scanForDataFlow('.');
+              return flows;
+            }
+            
+            function generateDataFlowDiagram(flows) {
+              if (flows.length === 0) return null;
+              
+              let mermaid = 'graph TB\n';
+              mermaid += '  %% Data Flow Diagram\n\n';
+              
+              // Group flows by type
+              const hasQuery = flows.some(f => f.type === 'database_query');
+              const hasAPI = flows.some(f => f.type === 'api_call');
+              const hasTransform = flows.some(f => f.type === 'data_transform');
+              const hasPersist = flows.some(f => f.type === 'data_persist');
+              
+              mermaid += '  Input[Input Data]\n';
+              mermaid += '  style Input fill:#e1f5ff\n\n';
+              
+              if (hasAPI) {
+                mermaid += '  API[External API Calls]\n';
+                mermaid += '  Input --> API\n';
+                mermaid += '  style API fill:#fff4e6\n\n';
+              }
+              
+              if (hasQuery) {
+                mermaid += '  Query[Database Queries]\n';
+                mermaid += '  Input --> Query\n';
+                mermaid += '  style Query fill:#e8f5e9\n\n';
+              }
+              
+              if (hasTransform) {
+                mermaid += '  Transform[Data Transformation]\n';
+                if (hasAPI) mermaid += '  API --> Transform\n';
+                if (hasQuery) mermaid += '  Query --> Transform\n';
+                mermaid += '  style Transform fill:#f3e5f5\n\n';
+              }
+              
+              if (hasPersist) {
+                mermaid += '  Persist[Data Persistence]\n';
+                if (hasTransform) {
+                  mermaid += '  Transform --> Persist\n';
+                } else {
+                  mermaid += '  Input --> Persist\n';
+                }
+                mermaid += '  style Persist fill:#fce4ec\n\n';
+              }
+              
+              mermaid += '  Output[Output/Response]\n';
+              if (hasTransform) {
+                mermaid += '  Transform --> Output\n';
+              } else if (hasPersist) {
+                mermaid += '  Persist --> Output\n';
+              }
+              mermaid += '  style Output fill:#e0f2f1\n';
+              
+              return mermaid;
+            }
+            
+            try {
+              const flows = analyzeDataFlow();
+              console.log(`Analyzed ${flows.length} data flow patterns`);
+              
+              if (flows.length > 0) {
+                const dataFlowDiagram = generateDataFlowDiagram(flows);
+                if (dataFlowDiagram) {
+                  fs.writeFileSync('docs/architecture/data-flow.mmd', dataFlowDiagram);
+                  console.log('Data flow diagram generated');
+                }
+              }
+            } catch (error) {
+              console.error('Error generating data flow diagram:', error);
+            }
+
+      - name: Generate sequence diagrams for key features
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            console.log('Generating sequence diagrams...');
+            
+            function findKeyFeatures() {
+              const features = [];
+              
+              function scanForFeatures(dir) {
+                try {
+                  const files = fs.readdirSync(dir);
+                  
+                  files.forEach(file => {
+                    if (file.startsWith('.')) return;
+                    
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    
+                    if (stat.isDirectory() && !['venv', 'node_modules', '__pycache__', 'tests'].includes(file)) {
+                      scanForFeatures(filePath);
+                    } else if (file.endsWith('.py') && !file.startsWith('test_')) {
+                      try {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        const lines = content.split('\n');
+                        
+                        let currentFunction = null;
+                        const interactions = [];
+                        
+                        for (let i = 0; i < lines.length; i++) {
+                          const line = lines[i];
+                          
+                          // Detect function definitions
+                          const funcMatch = line.match(/def\s+(\w+)\s*\(/);
+                          if (funcMatch) {
+                            if (currentFunction && interactions.length > 2) {
+                              features.push({
+                                name: currentFunction,
+                                file: path.relative('.', filePath),
+                                interactions: [...interactions]
+                              });
+                            }
+                            currentFunction = funcMatch[1];
+                            interactions.length = 0;
+                          }
+                          
+                          // Detect interactions
+                          if (currentFunction) {
+                            if (line.includes('.query(') || line.includes('.filter(')) {
+                              interactions.push({ type: 'database', action: 'query' });
+                            }
+                            if (line.includes('requests.') || line.includes('http')) {
+                              interactions.push({ type: 'api', action: 'call' });
+                            }
+                            if (line.includes('.save(') || line.includes('.commit(')) {
+                              interactions.push({ type: 'database', action: 'save' });
+                            }
+                            if (line.includes('cache.get') || line.includes('redis')) {
+                              interactions.push({ type: 'cache', action: 'read' });
+                            }
+                          }
+                        }
+                        
+                        if (currentFunction && interactions.length > 2) {
+                          features.push({
+                            name: currentFunction,
+                            file: path.relative('.', filePath),
+                            interactions: interactions
+                          });
+                        }
+                      } catch (err) {}
+                    }
+                  });
+                } catch (err) {}
+              }
+              
+              scanForFeatures('.');
+              return features;
+            }
+            
+            function generateSequenceDiagram(feature) {
+              let mermaid = `sequenceDiagram\n`;
+              mermaid += `    participant Client\n`;
+              mermaid += `    participant ${feature.name}\n`;
+              
+              const participants = new Set();
+              feature.interactions.forEach(interaction => {
+                if (!participants.has(interaction.type)) {
+                  mermaid += `    participant ${interaction.type}\n`;
+                  participants.add(interaction.type);
+                }
+              });
+              
+              mermaid += `\n    Client->>+${feature.name}: Request\n`;
+              
+              feature.interactions.forEach((interaction, idx) => {
+                const action = interaction.action.charAt(0).toUpperCase() + interaction.action.slice(1);
+                mermaid += `    ${feature.name}->>+${interaction.type}: ${action}\n`;
+                mermaid += `    ${interaction.type}-->>-${feature.name}: Response\n`;
+              });
+              
+              mermaid += `    ${feature.name}-->>-Client: Result\n`;
+              
+              return mermaid;
+            }
+            
+            try {
+              const features = findKeyFeatures();
+              console.log(`Found ${features.length} potential key features`);
+              
+              // Generate sequence diagrams for top 5 most complex features
+              const topFeatures = features
+                .sort((a, b) => b.interactions.length - a.interactions.length)
+                .slice(0, 5);
+              
+              if (topFeatures.length > 0) {
+                fs.mkdirSync('docs/architecture/sequences', { recursive: true });
+                
+                topFeatures.forEach(feature => {
+                  const diagram = generateSequenceDiagram(feature);
+                  const filename = `docs/architecture/sequences/${feature.name}.mmd`;
+                  fs.writeFileSync(filename, diagram);
+                });
+                
+                console.log(`Generated ${topFeatures.length} sequence diagrams`);
+                
+                // Create index for sequence diagrams
+                let index = '# Sequence Diagrams\n\n';
+                index += 'Sequence diagrams for key features:\n\n';
+                topFeatures.forEach(feature => {
+                  index += `- [${feature.name}](sequences/${feature.name}.mmd) (${feature.file})\n`;
+                });
+                fs.writeFileSync('docs/architecture/SEQUENCES.md', index);
+              }
+            } catch (error) {
+              console.error('Error generating sequence diagrams:', error);
+            }
+
+      - name: Analyze component coupling
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+            
+            console.log('Analyzing component coupling...');
+            
+            function analyzeComponentCoupling() {
+              const components = new Map();
+              const imports = [];
+              
+              function scanDirectory(dir, currentModule = '') {
+                try {
+                  const files = fs.readdirSync(dir);
+                  
+                  files.forEach(file => {
+                    if (file.startsWith('.')) return;
+                    
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    
+                    if (stat.isDirectory() && !['venv', 'node_modules', '__pycache__', 'tests'].includes(file)) {
+                      const hasInit = fs.existsSync(path.join(filePath, '__init__.py'));
+                      if (hasInit) {
+                        const moduleName = currentModule ? `${currentModule}.${file}` : file;
+                        components.set(moduleName, { 
+                          imports: new Set(), 
+                          importedBy: new Set(),
+                          fileCount: 0,
+                          loc: 0
+                        });
+                        scanDirectory(filePath, moduleName);
+                      } else {
+                        scanDirectory(filePath, currentModule);
+                      }
+                    } else if (file.endsWith('.py')) {
+                      try {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        const lines = content.split('\n');
+                        const loc = lines.filter(l => l.trim() && !l.trim().startsWith('#')).length;
+                        
+                        if (currentModule && components.has(currentModule)) {
+                          const comp = components.get(currentModule);
+                          comp.fileCount++;
+                          comp.loc += loc;
+                        }
+                        
+                        // Analyze imports
+                        lines.forEach(line => {
+                          const importMatch = line.match(/^(?:from|import)\s+([a-zA-Z_][a-zA-Z0-9_.]*)/);
+                          if (importMatch && currentModule) {
+                            const imported = importMatch[1].split('.')[0];
+                            
+                            // Check if it's an internal import
+                            if (components.has(imported) && imported !== currentModule) {
+                              imports.push({
+                                from: currentModule,
+                                to: imported
+                              });
+                              
+                              if (components.has(currentModule)) {
+                                components.get(currentModule).imports.add(imported);
+                              }
+                              if (components.has(imported)) {
+                                components.get(imported).importedBy.add(currentModule);
+                              }
+                            }
+                          }
+                        });
+                      } catch (err) {}
+                    }
+                  });
+                } catch (err) {}
+              }
+              
+              scanDirectory('.');
+              return { components, imports };
+            }
+            
+            function calculateCouplingMetrics(components, imports) {
+              const metrics = [];
+              
+              for (const [name, data] of components) {
+                const afferent = data.importedBy.size;  // Incoming dependencies
+                const efferent = data.imports.size;      // Outgoing dependencies
+                const total = afferent + efferent;
+                
+                // Instability: I = Ce / (Ca + Ce)
+                // 0 = maximally stable, 1 = maximally unstable
+                const instability = total > 0 ? efferent / total : 0;
+                
+                // Abstractness would require analyzing abstract classes
+                // For now, we'll estimate based on naming conventions
+                const abstractness = name.includes('interface') || name.includes('abstract') ? 0.8 : 0.2;
+                
+                // Distance from main sequence: D = |A + I - 1|
+                // Closer to 0 is better
+                const distance = Math.abs(abstractness + instability - 1);
+                
+                metrics.push({
+                  name,
+                  afferent,
+                  efferent,
+                  instability,
+                  distance,
+                  loc: data.loc,
+                  fileCount: data.fileCount,
+                  coupling: afferent + efferent
+                });
+              }
+              
+              return metrics.sort((a, b) => b.coupling - a.coupling);
+            }
+            
+            function generateCouplingDiagram(metrics, imports) {
+              let dot = 'digraph Coupling {\n';
+              dot += '  rankdir=TB;\n';
+              dot += '  node [shape=box, style="rounded,filled"];\n\n';
+              
+              // Color nodes by coupling level
+              for (const metric of metrics) {
+                let color = '#90EE90';  // Light green - low coupling
+                if (metric.coupling > 10) color = '#FFB6C1';  // Light red - high coupling
+                else if (metric.coupling > 5) color = '#FFD700';  // Gold - medium coupling
+                
+                const label = `${metric.name}\\n` +
+                             `Coupling: ${metric.coupling}\\n` +
+                             `In: ${metric.afferent} Out: ${metric.efferent}\\n` +
+                             `Instability: ${metric.instability.toFixed(2)}`;
+                
+                dot += `  "${metric.name}" [label="${label}", fillcolor="${color}"];\n`;
+              }
+              
+              dot += '\n';
+              
+              // Add edges with weights
+              const edgeCounts = new Map();
+              for (const imp of imports) {
+                const key = `${imp.from}->${imp.to}`;
+                edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+              }
+              
+              for (const [edge, count] of edgeCounts) {
+                const [from, to] = edge.split('->');
+                const width = Math.min(5, Math.max(1, count / 2));
+                dot += `  "${from}" -> "${to}" [penwidth=${width}, label="${count}"];\n`;
+              }
+              
+              dot += '}\n';
+              return dot;
+            }
+            
+            function generateCouplingReport(metrics) {
+              let report = '# Component Coupling Analysis\n\n';
+              report += '*Auto-generated coupling and dependency analysis*\n\n';
+              
+              report += '## Summary\n\n';
+              const highCoupling = metrics.filter(m => m.coupling > 10);
+              const mediumCoupling = metrics.filter(m => m.coupling > 5 && m.coupling <= 10);
+              const lowCoupling = metrics.filter(m => m.coupling <= 5);
+              
+              report += `- 🔴 **High Coupling** (>10): ${highCoupling.length} components\n`;
+              report += `- 🟡 **Medium Coupling** (5-10): ${mediumCoupling.length} components\n`;
+              report += `- 🟢 **Low Coupling** (≤5): ${lowCoupling.length} components\n\n`;
+              
+              if (highCoupling.length > 0) {
+                report += '## 🔴 High Coupling Components\n\n';
+                report += 'These components have high coupling and may benefit from refactoring:\n\n';
+                report += '| Component | Total Coupling | Afferent | Efferent | Instability | Distance |\n';
+                report += '|-----------|----------------|----------|----------|-------------|----------|\n';
+                
+                for (const metric of highCoupling) {
+                  report += `| ${metric.name} | ${metric.coupling} | ${metric.afferent} | ${metric.efferent} | `;
+                  report += `${metric.instability.toFixed(2)} | ${metric.distance.toFixed(2)} |\n`;
+                }
+                report += '\n';
+                
+                report += '### Recommendations\n\n';
+                report += '- Consider splitting highly coupled components into smaller, focused modules\n';
+                report += '- Look for opportunities to introduce interfaces/abstractions\n';
+                report += '- Review dependencies to ensure they are necessary\n\n';
+              }
+              
+              report += '## Metrics Explanation\n\n';
+              report += '- **Afferent Coupling (Ca)**: Number of components that depend on this component\n';
+              report += '- **Efferent Coupling (Ce)**: Number of components this component depends on\n';
+              report += '- **Instability (I)**: Ce / (Ca + Ce). Range: 0 (stable) to 1 (unstable)\n';
+              report += '- **Distance from Main Sequence (D)**: |A + I - 1|. Closer to 0 is better\n\n';
+              
+              report += '## All Components\n\n';
+              report += '| Component | Coupling | Files | LOC | Instability |\n';
+              report += '|-----------|----------|-------|-----|-------------|\n';
+              
+              for (const metric of metrics) {
+                report += `| ${metric.name} | ${metric.coupling} | ${metric.fileCount} | ${metric.loc} | `;
+                report += `${metric.instability.toFixed(2)} |\n`;
+              }
+              
+              return report;
+            }
+            
+            try {
+              const { components, imports } = analyzeComponentCoupling();
+              console.log(`Analyzed ${components.size} components with ${imports.length} imports`);
+              
+              if (components.size > 0) {
+                const metrics = calculateCouplingMetrics(components, imports);
+                
+                // Generate diagram
+                const couplingDot = generateCouplingDiagram(metrics, imports);
+                fs.writeFileSync('.architecture-temp/coupling-diagram.dot', couplingDot);
+                
+                try {
+                  execSync('dot -Tsvg .architecture-temp/coupling-diagram.dot -o docs/architecture/coupling-analysis.svg');
+                  execSync('dot -Tpng .architecture-temp/coupling-diagram.dot -o docs/architecture/coupling-analysis.png');
+                  console.log('Coupling diagram generated');
+                } catch (err) {
+                  console.log('Graphviz conversion failed:', err.message);
+                }
+                
+                // Generate report
+                const report = generateCouplingReport(metrics);
+                fs.writeFileSync('docs/architecture/COUPLING_ANALYSIS.md', report);
+                console.log('Coupling analysis report generated');
+              }
+            } catch (error) {
+              console.error('Error analyzing coupling:', error);
+            }
+
+      - name: Analyze performance hotspots
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+            
+            console.log('Analyzing performance hotspots...');
+            
+            function analyzeComplexity() {
+              const complexityData = [];
+              
+              function scanForComplexity(dir) {
+                try {
+                  const files = fs.readdirSync(dir);
+                  
+                  files.forEach(file => {
+                    if (file.startsWith('.')) return;
+                    
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    
+                    if (stat.isDirectory() && !['venv', 'node_modules', '__pycache__', 'tests'].includes(file)) {
+                      scanForComplexity(filePath);
+                    } else if (file.endsWith('.py')) {
+                      try {
+                        // Use radon to calculate complexity
+                        const result = execSync(`radon cc "${filePath}" -j`, { encoding: 'utf8' });
+                        const complexity = JSON.parse(result);
+                        
+                        if (complexity[filePath]) {
+                          for (const func of complexity[filePath]) {
+                            complexityData.push({
+                              file: path.relative('.', filePath),
+                              function: func.name,
+                              complexity: func.complexity,
+                              type: func.type,
+                              lineno: func.lineno,
+                              col_offset: func.col_offset
+                            });
+                          }
+                        }
+                      } catch (err) {
+                        // Radon might fail on some files, that's okay
+                      }
+                    }
+                  });
+                } catch (err) {}
+              }
+              
+              scanForComplexity('.');
+              return complexityData.sort((a, b) => b.complexity - a.complexity);
+            }
+            
+            function analyzeFunctionSizes() {
+              const functionSizes = [];
+              
+              function scanForFunctions(dir) {
+                try {
+                  const files = fs.readdirSync(dir);
+                  
+                  files.forEach(file => {
+                    if (file.startsWith('.')) return;
+                    
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    
+                    if (stat.isDirectory() && !['venv', 'node_modules', '__pycache__', 'tests'].includes(file)) {
+                      scanForFunctions(filePath);
+                    } else if (file.endsWith('.py')) {
+                      try {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        const lines = content.split('\n');
+                        
+                        let currentFunction = null;
+                        let functionStartLine = 0;
+                        let functionLines = 0;
+                        
+                        for (let i = 0; i < lines.length; i++) {
+                          const line = lines[i];
+                          const funcMatch = line.match(/^(\s*)def\s+(\w+)\s*\(/);
+                          
+                          if (funcMatch) {
+                            if (currentFunction) {
+                              functionSizes.push({
+                                file: path.relative('.', filePath),
+                                function: currentFunction,
+                                lines: functionLines,
+                                startLine: functionStartLine
+                              });
+                            }
+                            currentFunction = funcMatch[2];
+                            functionStartLine = i + 1;
+                            functionLines = 1;
+                          } else if (currentFunction) {
+                            functionLines++;
+                          }
+                        }
+                        
+                        if (currentFunction) {
+                          functionSizes.push({
+                            file: path.relative('.', filePath),
+                            function: currentFunction,
+                            lines: functionLines,
+                            startLine: functionStartLine
+                          });
+                        }
+                      } catch (err) {}
+                    }
+                  });
+                } catch (err) {}
+              }
+              
+              scanForFunctions('.');
+              return functionSizes.sort((a, b) => b.lines - a.lines);
+            }
+            
+            function generateHotspotDiagram(complexityData, functionSizes) {
+              // Combine complexity and size data
+              const hotspots = new Map();
+              
+              // Add complexity data
+              for (const item of complexityData.slice(0, 30)) {
+                const key = `${item.file}::${item.function}`;
+                hotspots.set(key, {
+                  file: item.file,
+                  function: item.function,
+                  complexity: item.complexity,
+                  lines: 0,
+                  score: item.complexity * 2
+                });
+              }
+              
+              // Add size data
+              for (const item of functionSizes.slice(0, 30)) {
+                const key = `${item.file}::${item.function}`;
+                if (hotspots.has(key)) {
+                  const spot = hotspots.get(key);
+                  spot.lines = item.lines;
+                  spot.score = spot.complexity * 2 + item.lines / 10;
+                } else {
+                  hotspots.set(key, {
+                    file: item.file,
+                    function: item.function,
+                    complexity: 0,
+                    lines: item.lines,
+                    score: item.lines / 5
+                  });
+                }
+              }
+              
+              // Generate heatmap diagram
+              let mermaid = 'graph TB\n';
+              mermaid += '  %% Performance Hotspots (by complexity and size)\n\n';
+              
+              const sortedHotspots = Array.from(hotspots.values())
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 20);
+              
+              // Group by file
+              const fileGroups = new Map();
+              for (const spot of sortedHotspots) {
+                if (!fileGroups.has(spot.file)) {
+                  fileGroups.set(spot.file, []);
+                }
+                fileGroups.get(spot.file).push(spot);
+              }
+              
+              let nodeId = 0;
+              for (const [file, spots] of fileGroups) {
+                mermaid += `  subgraph "${file.split('/').pop()}"\n`;
+                
+                for (const spot of spots) {
+                  const id = `node${nodeId++}`;
+                  let color = '#90EE90';  // Green - low concern
+                  
+                  if (spot.score > 50) color = '#FF6B6B';  // Red - critical
+                  else if (spot.score > 30) color = '#FFD93D';  // Yellow - warning
+                  else if (spot.score > 15) color = '#FFA500';  // Orange - moderate
+                  
+                  const label = `${spot.function}\\nCC: ${spot.complexity} Lines: ${spot.lines}`;
+                  mermaid += `    ${id}["${label}"]\n`;
+                  mermaid += `    style ${id} fill:${color}\n`;
+                }
+                
+                mermaid += '  end\n\n';
+              }
+              
+              return mermaid;
+            }
+            
+            function generateHotspotReport(complexityData, functionSizes) {
+              let report = '# Performance Hotspot Analysis\n\n';
+              report += '*Auto-generated complexity and size analysis*\n\n';
+              
+              const criticalComplexity = complexityData.filter(d => d.complexity > 20);
+              const highComplexity = complexityData.filter(d => d.complexity > 10 && d.complexity <= 20);
+              const largeFunctions = functionSizes.filter(f => f.lines > 100);
+              
+              report += '## Summary\n\n';
+              report += `- 🔴 **Critical Complexity** (>20): ${criticalComplexity.length} functions\n`;
+              report += `- 🟡 **High Complexity** (10-20): ${highComplexity.length} functions\n`;
+              report += `- 📏 **Large Functions** (>100 lines): ${largeFunctions.length} functions\n\n`;
+              
+              if (criticalComplexity.length > 0) {
+                report += '## 🔴 Critical Complexity Functions\n\n';
+                report += 'These functions have very high cyclomatic complexity and should be refactored:\n\n';
+                report += '| File | Function | Complexity | Line |\n';
+                report += '|------|----------|------------|------|\n';
+                
+                for (const func of criticalComplexity.slice(0, 15)) {
+                  report += `| ${func.file} | \`${func.function}\` | **${func.complexity}** | ${func.lineno} |\n`;
+                }
+                report += '\n';
+              }
+              
+              if (largeFunctions.length > 0) {
+                report += '## 📏 Large Functions\n\n';
+                report += 'These functions are very long and may benefit from decomposition:\n\n';
+                report += '| File | Function | Lines | Starting Line |\n';
+                report += '|------|----------|-------|---------------|\n';
+                
+                for (const func of largeFunctions.slice(0, 15)) {
+                  report += `| ${func.file} | \`${func.function}\` | ${func.lines} | ${func.startLine} |\n`;
+                }
+                report += '\n';
+              }
+              
+              report += '## Recommendations\n\n';
+              report += '### For High Complexity Functions:\n';
+              report += '- Break down into smaller, focused functions\n';
+              report += '- Reduce nested conditionals and loops\n';
+              report += '- Extract complex conditions into named boolean functions\n';
+              report += '- Consider using design patterns (Strategy, Command, etc.)\n\n';
+              
+              report += '### For Large Functions:\n';
+              report += '- Split into multiple smaller functions\n';
+              report += '- Extract helper methods\n';
+              report += '- Consider if the function has too many responsibilities\n\n';
+              
+              report += '## Complexity Metrics\n\n';
+              report += '**Cyclomatic Complexity (CC)** measures the number of linearly independent paths through code:\n';
+              report += '- **1-10**: Simple, low risk\n';
+              report += '- **11-20**: Moderate complexity, medium risk\n';
+              report += '- **21-50**: Complex, high risk\n';
+              report += '- **>50**: Very complex, very high risk\n';
+              
+              return report;
+            }
+            
+            try {
+              console.log('Running radon for complexity analysis...');
+              const complexityData = analyzeComplexity();
+              const functionSizes = analyzeFunctionSizes();
+              
+              console.log(`Found ${complexityData.length} functions with complexity data`);
+              console.log(`Found ${functionSizes.length} functions with size data`);
+              
+              if (complexityData.length > 0 || functionSizes.length > 0) {
+                // Generate diagram
+                const hotspotDiagram = generateHotspotDiagram(complexityData, functionSizes);
+                fs.writeFileSync('docs/architecture/hotspots.mmd', hotspotDiagram);
+                
+                // Generate report
+                const report = generateHotspotReport(complexityData, functionSizes);
+                fs.writeFileSync('docs/architecture/HOTSPOTS.md', report);
+                
+                console.log('Hotspot analysis completed');
+              }
+            } catch (error) {
+              console.error('Error analyzing hotspots:', error);
+            }
+
+      - name: Analyze test coverage mapping
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+
+            console.log('Analyzing test coverage...');
+
+            function runCoverageAnalysis() {
+              try {
+                if (fs.existsSync('tests') || fs.existsSync('test')) {
+                  console.log('Running tests with coverage...');
+                  execSync('python -m pytest --cov=. --cov-report=json --cov-report=html -q || true', {
+                    encoding: 'utf8',
+                    stdio: 'inherit'
+                  });
+                  if (fs.existsSync('coverage.json')) {
+                    return JSON.parse(fs.readFileSync('coverage.json', 'utf8'));
+                  }
+                } else {
+                  console.log('No tests directory found; skipping coverage run.');
+                }
+              } catch (err) {
+                console.log('Coverage analysis skipped:', err.message);
+              }
+              return null;
+            }
+
+            function mapCoverageToArchitecture(coverage) {
+              if (!coverage || !coverage.files) return null;
+
+              const modulesCoverage = new Map();
+
+              for (const [filePath, fileData] of Object.entries(coverage.files)) {
+                const relativePath = filePath.replace(process.cwd(), '').replace(/^[\\/]/, '');
+                const parts = relativePath.split(/[\\/]/);
+
+                // Skip tests and non-Python
+                if (parts.includes('test') || parts.includes('tests') || !filePath.endsWith('.py')) continue;
+
+                // Determine module name
+                let moduleName = parts[0];
+                if (parts[0] === 'src' && parts.length > 1) moduleName = parts[1];
+
+                if (!modulesCoverage.has(moduleName)) {
+                  modulesCoverage.set(moduleName, {
+                    files: [],
+                    totalStatements: 0,
+                    coveredStatements: 0,
+                    missingLines: 0,
+                    excludedLines: 0
+                  });
+                }
+
+                const module = modulesCoverage.get(moduleName);
+                module.files.push(relativePath);
+
+                const summary = fileData.summary || {};
+                module.totalStatements += summary.num_statements || 0;
+                module.coveredStatements += summary.covered_lines || 0;
+                module.missingLines += summary.missing_lines || 0;
+                module.excludedLines += summary.excluded_lines || 0;
+              }
+
+              for (const [, data] of modulesCoverage) {
+                data.percentage = data.totalStatements
+                  ? (data.coveredStatements / data.totalStatements) * 100
+                  : 0;
+              }
+              return modulesCoverage;
+            }
+
+            function generateCoverageDiagram(modulesCoverage) {
+              let dot = 'digraph Coverage {\n';
+              dot += '  rankdir=TB;\n';
+              dot += '  node [shape=box, style="rounded,filled"];\n\n';
+
+              const sorted = Array.from(modulesCoverage.entries())
+                .sort((a, b) => a[1].percentage - b[1].percentage);
+
+              for (const [name, d] of sorted) {
+                let color = '#90EE90';
+                if (d.percentage < 50) color = '#FF6B6B';
+                else if (d.percentage < 70) color = '#FFA500';
+                else if (d.percentage < 85) color = '#FFD93D';
+
+                const label = `${name}\\n${d.percentage.toFixed(1)}% covered\\n${d.coveredStatements}/${d.totalStatements} statements`;
+                dot += `  "${name}" [label="${label}", fillcolor="${color}"];\n`;
+              }
+              dot += '}\n';
+              return dot;
+            }
+
+            function generateCoverageReport(modulesCoverage, totalCoverage) {
+              let report = '# Test Coverage Mapping\n\n';
+              report += '*Auto-generated test coverage analysis*\n\n';
+
+              if (totalCoverage?.totals) {
+                report += '## Overall Coverage\n\n';
+                report += `**Total Coverage: ${Number(totalCoverage.totals.percent_covered || 0).toFixed(2)}%**\n\n`;
+                report += `- Covered Lines: ${totalCoverage.totals.covered_lines}\n`;
+                report += `- Total Statements: ${totalCoverage.totals.num_statements}\n`;
+                report += `- Missing Lines: ${totalCoverage.totals.missing_lines}\n\n`;
+              }
+
+              const entries = Array.from(modulesCoverage.entries());
+
+              const poor = entries
+                .filter(([, d]) => d.percentage < 70)
+                .sort((a, b) => a[1].percentage - b[1].percentage);
+
+              const good = entries
+                .filter(([, d]) => d.percentage >= 85)
+                .sort((a, b) => b[1].percentage - a[1].percentage);
+
+              if (poor.length) {
+                report += '## 🔴 Modules Needing Test Coverage\n\n';
+                report += '| Module | Coverage | Covered | Total | Missing Lines |\n';
+                report += '|--------|----------|---------|-------|---------------|\n';
+                for (const [name, d] of poor) {
+                  const emoji = d.percentage < 50 ? '🔴' : '🟡';
+                  report += `| ${name} | ${emoji} ${d.percentage.toFixed(1)}% | ${d.coveredStatements} | ${d.totalStatements} | ${d.missingLines} |\n`;
+                }
+                report += '\n';
+              }
+
+              if (good.length) {
+                report += '## ✅ Well-Tested Modules\n\n';
+                report += '| Module | Coverage | Covered | Total |\n';
+                report += '|--------|----------|---------|-------|\n';
+                for (const [name, d] of good) {
+                  report += `| ${name} | 🟢 ${d.percentage.toFixed(1)}% | ${d.coveredStatements} | ${d.totalStatements} |\n`;
+                }
+                report += '\n';
+              }
+
+              report += '## All Modules\n\n';
+              report += '| Module | Coverage | Covered | Total | Files |\n';
+              report += '|--------|----------|---------|-------|-------|\n';
+
+              const all = entries.sort((a, b) => b[1].percentage - a[1].percentage);
+              for (const [name, d] of all) {
+                report += `| ${name} | ${d.percentage.toFixed(1)}% | ${d.coveredStatements} | ${d.totalStatements} | ${d.files.length} |\n`;
+              }
+
+              return report;
+            }
+
+            // Execute
+            try {
+              fs.mkdirSync('docs/architecture', { recursive: true });
+              fs.mkdirSync('.architecture-temp', { recursive: true });
+
+              const coverage = runCoverageAnalysis();
+              if (!coverage) {
+                console.log('No coverage.json present; skipping coverage artifacts.');
+                return;
+              }
+
+              const modulesCoverage = mapCoverageToArchitecture(coverage);
+              if (!modulesCoverage || modulesCoverage.size === 0) {
+                console.log('No module coverage to report.');
+                return;
+              }
+
+              const report = generateCoverageReport(modulesCoverage, coverage);
+              fs.writeFileSync('docs/architecture/COVERAGE.md', report);
+
+              const dot = generateCoverageDiagram(modulesCoverage);
+              const dotPath = '.architecture-temp/coverage-map.dot';
+              fs.writeFileSync(dotPath, dot);
+
+              try {
+                execSync(`dot -Tsvg ${dotPath} -o docs/architecture/coverage-map.svg`);
+                execSync(`dot -Tpng ${dotPath} -o docs/architecture/coverage-map.png`);
+                console.log('Coverage diagrams generated.');
+              } catch (e) {
+                console.log('Graphviz conversion failed:', e.message);
+              }
+            } catch (error) {
+              console.error('Coverage mapping failed:', error);
+            }

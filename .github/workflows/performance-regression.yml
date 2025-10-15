@@ -1,0 +1,426 @@
+name: Performance Regression Detector
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  BENCHMARK_ITERATIONS: 10
+  REGRESSION_THRESHOLD: 10  # Percentage threshold for regression alert
+
+jobs:
+  benchmark-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install poetry && poetry install; fi
+          pip install pytest pytest-benchmark memory-profiler psutil
+
+      - name: Run PR benchmarks
+        id: pr-bench
+        run: |
+          # Create benchmarks directory if it doesn't exist
+          mkdir -p .benchmarks
+          
+          # Run pytest-benchmark if tests exist
+          if [ -d "tests" ] || [ -d "test" ]; then
+            python -m pytest tests/ --benchmark-only --benchmark-json=.benchmarks/pr_results.json || echo "No benchmark tests found"
+          fi
+          
+          # Run custom performance script if it exists
+          if [ -f "benchmarks/run_benchmarks.py" ]; then
+            python benchmarks/run_benchmarks.py --output .benchmarks/pr_custom.json
+          fi
+          
+          # Run memory profiling on key modules
+          if [ -f "benchmarks/profile_memory.py" ]; then
+            python -m memory_profiler benchmarks/profile_memory.py > .benchmarks/pr_memory.txt
+          fi
+          
+          echo "PR benchmarks completed"
+
+      - name: Upload PR benchmark results
+        uses: actions/upload-artifact@v3
+        with:
+          name: pr-benchmarks
+          path: .benchmarks/
+          retention-days: 30
+
+  benchmark-base:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install poetry && poetry install; fi
+          pip install pytest pytest-benchmark memory-profiler psutil
+
+      - name: Run base benchmarks
+        id: base-bench
+        run: |
+          mkdir -p .benchmarks
+          
+          if [ -d "tests" ] || [ -d "test" ]; then
+            python -m pytest tests/ --benchmark-only --benchmark-json=.benchmarks/base_results.json || echo "No benchmark tests found"
+          fi
+          
+          if [ -f "benchmarks/run_benchmarks.py" ]; then
+            python benchmarks/run_benchmarks.py --output .benchmarks/base_custom.json
+          fi
+          
+          if [ -f "benchmarks/profile_memory.py" ]; then
+            python -m memory_profiler benchmarks/profile_memory.py > .benchmarks/base_memory.txt
+          fi
+          
+          echo "Base benchmarks completed"
+
+      - name: Upload base benchmark results
+        uses: actions/upload-artifact@v3
+        with:
+          name: base-benchmarks
+          path: .benchmarks/
+          retention-days: 30
+
+  compare-and-report:
+    runs-on: ubuntu-latest
+    needs: [benchmark-pr, benchmark-base]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download PR benchmarks
+        uses: actions/download-artifact@v3
+        with:
+          name: pr-benchmarks
+          path: ./pr-benchmarks
+
+      - name: Download base benchmarks
+        uses: actions/download-artifact@v3
+        with:
+          name: base-benchmarks
+          path: ./base-benchmarks
+
+      - name: Analyze and compare results
+        id: analyze
+        uses: actions/github-script@v7
+        env:
+          REGRESSION_THRESHOLD: ${{ env.REGRESSION_THRESHOLD }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Helper function to read JSON files
+            function readJSON(filePath) {
+              try {
+                if (fs.existsSync(filePath)) {
+                  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                }
+              } catch (error) {
+                console.log(`Error reading ${filePath}: ${error.message}`);
+              }
+              return null;
+            }
+            
+            // Read benchmark results
+            const prResults = readJSON('./pr-benchmarks/pr_results.json');
+            const baseResults = readJSON('./base-benchmarks/base_results.json');
+            const prCustom = readJSON('./pr-benchmarks/pr_custom.json');
+            const baseCustom = readJSON('./base-benchmarks/base_custom.json');
+            
+            const regressionThreshold = parseFloat(process.env.REGRESSION_THRESHOLD);
+            
+            let report = '# ⚡ Performance Regression Analysis\n\n';
+            report += `**Base commit:** \`${context.payload.pull_request.base.sha.substring(0, 7)}\`\n`;
+            report += `**PR commit:** \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n`;
+            report += `**Regression threshold:** ${regressionThreshold}%\n\n`;
+            
+            let hasRegressions = false;
+            let hasImprovements = false;
+            const regressions = [];
+            const improvements = [];
+            const stable = [];
+            
+            // Analyze pytest-benchmark results
+            if (prResults && baseResults && prResults.benchmarks && baseResults.benchmarks) {
+              report += '## 📊 Benchmark Test Results\n\n';
+              
+              const prBenchMap = new Map(
+                prResults.benchmarks.map(b => [b.name || b.fullname, b])
+              );
+              
+              for (const baseBench of baseResults.benchmarks) {
+                const benchName = baseBench.name || baseBench.fullname;
+                const prBench = prBenchMap.get(benchName);
+                
+                if (!prBench) continue;
+                
+                const baseTime = baseBench.stats?.mean || baseBench.stats?.median || 0;
+                const prTime = prBench.stats?.mean || prBench.stats?.median || 0;
+                
+                if (baseTime === 0) continue;
+                
+                const percentChange = ((prTime - baseTime) / baseTime) * 100;
+                const absChange = Math.abs(percentChange);
+                
+                const result = {
+                  name: benchName,
+                  baseTime: baseTime,
+                  prTime: prTime,
+                  change: percentChange,
+                  absChange: absChange,
+                  isRegression: percentChange > regressionThreshold,
+                  isImprovement: percentChange < -regressionThreshold
+                };
+                
+                if (result.isRegression) {
+                  regressions.push(result);
+                  hasRegressions = true;
+                } else if (result.isImprovement) {
+                  improvements.push(result);
+                  hasImprovements = true;
+                } else {
+                  stable.push(result);
+                }
+              }
+            }
+            
+            // Analyze custom benchmarks
+            if (prCustom && baseCustom) {
+              report += '\n## 🔧 Custom Benchmark Results\n\n';
+              
+              for (const [key, prValue] of Object.entries(prCustom)) {
+                const baseValue = baseCustom[key];
+                if (baseValue && typeof prValue === 'number' && typeof baseValue === 'number') {
+                  const percentChange = ((prValue - baseValue) / baseValue) * 100;
+                  const absChange = Math.abs(percentChange);
+                  
+                  const result = {
+                    name: key,
+                    baseTime: baseValue,
+                    prTime: prValue,
+                    change: percentChange,
+                    absChange: absChange,
+                    isRegression: percentChange > regressionThreshold,
+                    isImprovement: percentChange < -regressionThreshold
+                  };
+                  
+                  if (result.isRegression) {
+                    regressions.push(result);
+                    hasRegressions = true;
+                  } else if (result.isImprovement) {
+                    improvements.push(result);
+                    hasImprovements = true;
+                  } else {
+                    stable.push(result);
+                  }
+                }
+              }
+            }
+            
+            // Generate summary
+            report += '## 📈 Summary\n\n';
+            if (hasRegressions) {
+              report += `### 🚨 **${regressions.length} Performance Regression${regressions.length > 1 ? 's' : ''} Detected!**\n\n`;
+            } else {
+              report += '### ✅ No performance regressions detected\n\n';
+            }
+            
+            report += `- 🚨 **Regressions:** ${regressions.length}\n`;
+            report += `- 🎉 **Improvements:** ${improvements.length}\n`;
+            report += `- ➡️ **Stable:** ${stable.length}\n\n`;
+            
+            // Format time helper
+            function formatTime(seconds) {
+              if (seconds < 0.001) return `${(seconds * 1000000).toFixed(2)} μs`;
+              if (seconds < 1) return `${(seconds * 1000).toFixed(2)} ms`;
+              return `${seconds.toFixed(3)} s`;
+            }
+            
+            // Format change helper
+            function formatChange(change) {
+              const sign = change > 0 ? '+' : '';
+              return `${sign}${change.toFixed(2)}%`;
+            }
+            
+            // Report regressions
+            if (regressions.length > 0) {
+              report += '## 🚨 Performance Regressions\n\n';
+              report += '| Benchmark | Base | PR | Change |\n';
+              report += '|-----------|------|----|---------|\n';
+              
+              regressions.sort((a, b) => b.absChange - a.absChange);
+              
+              for (const reg of regressions) {
+                report += `| ${reg.name} | ${formatTime(reg.baseTime)} | ${formatTime(reg.prTime)} | `;
+                report += `🔴 **${formatChange(reg.change)}** |\n`;
+              }
+              report += '\n';
+            }
+            
+            // Report improvements
+            if (improvements.length > 0) {
+              report += '## 🎉 Performance Improvements\n\n';
+              report += '| Benchmark | Base | PR | Change |\n';
+              report += '|-----------|------|----|---------|\n';
+              
+              improvements.sort((a, b) => a.change - b.change);
+              
+              for (const imp of improvements.slice(0, 10)) {
+                report += `| ${imp.name} | ${formatTime(imp.baseTime)} | ${formatTime(imp.prTime)} | `;
+                report += `🟢 **${formatChange(imp.change)}** |\n`;
+              }
+              report += '\n';
+            }
+            
+            // Report stable benchmarks (collapsed)
+            if (stable.length > 0) {
+              report += '## ➡️ Stable Performance\n\n';
+              report += '<details>\n<summary>Click to expand stable benchmarks</summary>\n\n';
+              report += '| Benchmark | Base | PR | Change |\n';
+              report += '|-----------|------|----|---------|\n';
+              
+              for (const st of stable) {
+                report += `| ${st.name} | ${formatTime(st.baseTime)} | ${formatTime(st.prTime)} | `;
+                report += `${formatChange(st.change)} |\n`;
+              }
+              report += '\n</details>\n\n';
+            }
+            
+            // Memory analysis (if available)
+            const prMemory = fs.existsSync('./pr-benchmarks/pr_memory.txt') 
+              ? fs.readFileSync('./pr-benchmarks/pr_memory.txt', 'utf8') 
+              : null;
+            const baseMemory = fs.existsSync('./base-benchmarks/base_memory.txt')
+              ? fs.readFileSync('./base-benchmarks/base_memory.txt', 'utf8')
+              : null;
+            
+            if (prMemory && baseMemory) {
+              report += '## 💾 Memory Profile\n\n';
+              report += '<details>\n<summary>Click to view memory comparison</summary>\n\n';
+              report += '### Base Branch\n```\n' + baseMemory.slice(0, 1000) + '\n```\n\n';
+              report += '### PR Branch\n```\n' + prMemory.slice(0, 1000) + '\n```\n';
+              report += '</details>\n\n';
+            }
+            
+            // Recommendations
+            if (hasRegressions) {
+              report += '## 💡 Recommendations\n\n';
+              report += '⚠️ This PR introduces performance regressions. Consider:\n\n';
+              report += '- Profiling the affected code paths to identify bottlenecks\n';
+              report += '- Running the benchmarks locally to reproduce the issue\n';
+              report += '- Evaluating if the regression is acceptable for the features added\n';
+              report += '- Optimizing hot paths or considering algorithmic improvements\n\n';
+            } else if (hasImprovements) {
+              report += '## 💡 Great Work!\n\n';
+              report += '🎉 This PR improves performance! Nice job optimizing the code.\n\n';
+            }
+            
+            report += '---\n';
+            report += '*Performance tests run on ubuntu-latest. Results may vary across environments.*\n';
+            report += '*To reproduce locally: `pytest tests/ --benchmark-only`*';
+            
+            // Post comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: report
+            });
+            
+            // Set output for potential status checks
+            core.setOutput('has_regressions', hasRegressions);
+            core.setOutput('regression_count', regressions.length);
+            core.setOutput('improvement_count', improvements.length);
+            
+            // Optionally fail the workflow if regressions detected
+            // Uncomment the next line to block PRs with regressions
+            // if (hasRegressions) core.setFailed(`${regressions.length} performance regression(s) detected`);
+
+      - name: Create check run with results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const hasRegressions = '${{ steps.analyze.outputs.has_regressions }}' === 'true';
+            const regressionCount = parseInt('${{ steps.analyze.outputs.regression_count }}' || '0');
+            const improvementCount = parseInt('${{ steps.analyze.outputs.improvement_count }}' || '0');
+            
+            let conclusion = 'success';
+            let title = '✅ No performance regressions';
+            let summary = 'All benchmarks passed the regression threshold.';
+            
+            if (hasRegressions) {
+              conclusion = 'neutral'; // Change to 'failure' to block PRs
+              title = `🚨 ${regressionCount} performance regression${regressionCount > 1 ? 's' : ''} detected`;
+              summary = `This PR introduces ${regressionCount} performance regression(s). Review the detailed report for more information.`;
+            } else if (improvementCount > 0) {
+              title = `🎉 ${improvementCount} performance improvement${improvementCount > 1 ? 's' : ''}!`;
+              summary = `Great work! This PR improves performance in ${improvementCount} benchmark(s).`;
+            }
+            
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Performance Regression Check',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: title,
+                summary: summary,
+                text: 'See the PR comment for detailed benchmark results.'
+              }
+            });
