@@ -114,7 +114,7 @@ jobs:
           fi
 
       - name: Generate class diagrams
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -285,7 +285,7 @@ jobs:
             }
 
       - name: Generate module dependency diagram
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -447,7 +447,7 @@ jobs:
           fi
 
       - name: Generate architecture overview
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -650,7 +650,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate API endpoint map
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -866,7 +866,7 @@ jobs:
             }
 
       - name: Generate data flow diagrams
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -994,7 +994,7 @@ jobs:
             }
 
       - name: Generate sequence diagrams for key features
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -1135,7 +1135,7 @@ jobs:
             }
 
       - name: Analyze component coupling
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -1367,7 +1367,7 @@ jobs:
             }
 
       - name: Analyze performance hotspots
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -1641,7 +1641,7 @@ jobs:
             }
 
       - name: Analyze test coverage mapping
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
