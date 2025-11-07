@@ -139,13 +139,13 @@ jobs:
           node-version: '20'
 
       - name: Download PR benchmarks
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: pr-benchmarks
           path: ./pr-benchmarks
 
       - name: Download base benchmarks
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: base-benchmarks
           path: ./base-benchmarks
