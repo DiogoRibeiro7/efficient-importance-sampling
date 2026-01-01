@@ -66,7 +66,7 @@ jobs:
           echo "PR benchmarks completed"
 
       - name: Upload PR benchmark results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: pr-benchmarks
           path: .benchmarks/
@@ -120,7 +120,7 @@ jobs:
           echo "Base benchmarks completed"
 
       - name: Upload base benchmark results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: base-benchmarks
           path: .benchmarks/
