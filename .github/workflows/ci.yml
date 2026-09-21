@@ -35,7 +35,7 @@ jobs:
         run: ruff check .
 
       - name: Check new-code formatting
-        run: ruff format --check tests
+        run: ruff format --check tests src/efficient_importance_sampling/__init__.py src/efficient_importance_sampling/__main__.py
 
       - name: Type-check tests
         run: mypy tests
@@ -67,7 +67,7 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Audit source
-        run: bandit -q -r efficient_importance_sampling.py
+        run: bandit -q -r src/efficient_importance_sampling
 
       - name: Audit dependencies
         run: pip-audit
