@@ -44,16 +44,30 @@ class CumulantFunction:
             mean: Mean vector of increments
             covariance: Covariance matrix of increments
         """
-        self.mean = mean
-        self.cov = covariance
-        self.d = len(mean)
+        mean_array = np.asarray(mean, dtype=float)
+        covariance_array = np.asarray(covariance, dtype=float)
 
-        # Precompute inverse for efficiency
+        if mean_array.ndim != 1 or mean_array.size == 0:
+            raise ValueError("Mean must be a non-empty one-dimensional vector")
+        if covariance_array.shape != (mean_array.size, mean_array.size):
+            raise ValueError("Covariance matrix dimensions must match the mean vector")
+        if not np.all(np.isfinite(mean_array)) or not np.all(np.isfinite(covariance_array)):
+            raise ValueError("Mean and covariance must contain only finite values")
+        if not np.allclose(covariance_array, covariance_array.T, rtol=1e-10, atol=1e-12):
+            raise ValueError("Covariance matrix must be symmetric")
+
         try:
-            self.cov_inv = np.linalg.inv(covariance)
-            self.cov_det = np.linalg.det(covariance)
-        except np.linalg.LinAlgError:
-            raise ValueError("Covariance matrix must be positive definite")
+            np.linalg.cholesky(covariance_array)
+        except np.linalg.LinAlgError as error:
+            raise ValueError("Covariance matrix must be positive definite") from error
+
+        self.mean = mean_array
+        self.cov = covariance_array
+        self.d = mean_array.size
+
+        # Precompute repeated linear-algebra quantities after validation.
+        self.cov_inv = np.linalg.inv(covariance_array)
+        self.cov_det = np.linalg.det(covariance_array)
 
     def Lambda(self, theta: np.ndarray) -> float:
         """Cumulant generating function Λ(θ)."""
@@ -245,9 +259,16 @@ class MultidimensionalSiegmund:
             mean: Mean drift vector (should have negative components)
             covariance: Covariance matrix of increments
         """
+        if d < 1:
+            raise ValueError("d must be a positive integer")
+        if len(mean) != d:
+            raise ValueError("Mean vector dimension must equal d")
+        if not np.isfinite(ell) or not np.isfinite(u) or ell <= 0 or u <= 0:
+            raise ValueError("Boundaries ell and u must be finite and positive")
+
         self.d = d
-        self.ell = ell
-        self.u = u
+        self.ell = float(ell)
+        self.u = float(u)
         self.cgf = CumulantFunction(mean, covariance)
         self.optimizer = RegionOptimizer(self.cgf)
 
@@ -467,16 +488,17 @@ class GapRule:
             mean: Mean vector (first m positive, rest negative)
             covariance: Covariance matrix
         """
+        if d < 2:
+            raise ValueError("d must be at least 2")
+        if not 1 <= m < d:
+            raise ValueError("m must satisfy 1 <= m < d")
+        if len(mean) != d:
+            raise ValueError("Mean vector dimension must equal d")
+
         self.d = d
         self.m = m
         self.cgf = CumulantFunction(mean, covariance)
         self.optimizer = RegionOptimizer(self.cgf)
-
-        # Validate inputs
-        if m >= d:
-            raise ValueError("m must be less than d")
-        if len(mean) != d:
-            raise ValueError("Mean vector dimension mismatch")
 
     def get_candidate_regions(self) -> List[List[int]]:
         """
@@ -561,13 +583,17 @@ class SumIntersectionRule:
             mean: Mean vector (all negative)
             covariance: Covariance matrix
         """
+        if d < 2:
+            raise ValueError("d must be at least 2")
+        if not 1 <= L < d:
+            raise ValueError("L must satisfy 1 <= L < d")
+        if len(mean) != d:
+            raise ValueError("Mean vector dimension must equal d")
+
         self.d = d
         self.L = L
         self.cgf = CumulantFunction(mean, covariance)
         self.optimizer = RegionOptimizer(self.cgf)
-
-        if L >= d:
-            raise ValueError("L must be less than d")
 
     def compute_feasible_mixture(self) -> Tuple[List[np.ndarray], List[float]]:
         """

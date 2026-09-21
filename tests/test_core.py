@@ -8,7 +8,9 @@ import pytest
 from efficient_importance_sampling import (
     CumulantFunction,
     GapRule,
+    MultidimensionalSiegmund,
     SimulationResult,
+    SumIntersectionRule,
 )
 
 
@@ -49,7 +51,7 @@ def test_optimal_theta_maps_back_to_requested_point() -> None:
 
 def test_gap_rule_rejects_invalid_signal_count() -> None:
     """A gap rule needs at least one coordinate outside the signal set."""
-    with pytest.raises(ValueError, match="m must be less than d"):
+    with pytest.raises(ValueError, match="m must satisfy"):
         GapRule(
             d=2,
             m=2,
@@ -71,3 +73,71 @@ def test_simulation_result_is_a_typed_value_object() -> None:
 
     assert result.samples_used == 1_000
     assert result.relative_error == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize(
+    ("mean", "covariance", "message"),
+    [
+        (
+            np.array([0.0, 1.0]),
+            np.array([[1.0, 0.2], [0.1, 1.0]]),
+            "symmetric",
+        ),
+        (
+            np.array([0.0, 1.0]),
+            np.array([[1.0, 2.0], [2.0, 1.0]]),
+            "positive definite",
+        ),
+        (
+            np.array([0.0, np.nan]),
+            np.eye(2),
+            "finite",
+        ),
+        (
+            np.array([0.0, 1.0]),
+            np.eye(3),
+            "dimensions",
+        ),
+    ],
+)
+def test_cumulant_function_rejects_invalid_distribution_parameters(
+    mean: np.ndarray,
+    covariance: np.ndarray,
+    message: str,
+) -> None:
+    """Invalid Gaussian parameters must fail before optimisation begins."""
+    with pytest.raises(ValueError, match=message):
+        CumulantFunction(mean, covariance)
+
+
+def test_siegmund_problem_validates_dimensions_and_boundaries() -> None:
+    """The declared dimension and both stopping boundaries must be meaningful."""
+    with pytest.raises(ValueError, match="dimension"):
+        MultidimensionalSiegmund(
+            d=3,
+            ell=1.0,
+            u=1.0,
+            mean=np.zeros(2),
+            covariance=np.eye(2),
+        )
+
+    with pytest.raises(ValueError, match="finite and positive"):
+        MultidimensionalSiegmund(
+            d=2,
+            ell=0.0,
+            u=1.0,
+            mean=np.zeros(2),
+            covariance=np.eye(2),
+        )
+
+
+@pytest.mark.parametrize("order", [0, 3])
+def test_sum_intersection_rule_validates_order(order: int) -> None:
+    """The order parameter must describe a non-empty proper subset."""
+    with pytest.raises(ValueError, match="L must satisfy"):
+        SumIntersectionRule(
+            d=3,
+            L=order,
+            mean=-np.ones(3),
+            covariance=np.eye(3),
+        )
