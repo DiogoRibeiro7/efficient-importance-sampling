@@ -11,6 +11,7 @@ This implements the full mathematical framework including:
 
 import numpy as np
 import scipy.optimize as opt
+from scipy.special import logsumexp
 from typing import Dict, List, Optional, Tuple, Union
 import itertools
 import warnings
@@ -391,6 +392,24 @@ class MultidimensionalSiegmund:
 
         return all_tilts, weights, all_indices
 
+    def _mixture_log_likelihood_ratio(
+        self,
+        position: np.ndarray,
+        n_steps: int,
+        tilts: List[np.ndarray],
+        weights: List[float],
+    ) -> float:
+        """Compute log(dP/dQ) for the complete exponential-tilt mixture."""
+        log_density_ratios = np.array(
+            [
+                np.log(weight)
+                + np.dot(theta, position)
+                - n_steps * self.cgf.Lambda(theta)
+                for theta, weight in zip(tilts, weights)
+            ]
+        )
+        return -float(logsumexp(log_density_ratios))
+
     def simulate_wrong_exit_probability(
         self,
         b: float,
@@ -475,14 +494,13 @@ class MultidimensionalSiegmund:
             wrong_exit = any(position[k] > 0 for k in range(self.d))
 
             if wrong_exit:
-                # Compute likelihood ratio
-                log_likelihood_ratio = -np.dot(
-                    theta, position
-                ) + n_steps * self.cgf.Lambda(theta)
-                likelihood_ratio = np.exp(log_likelihood_ratio)
-
-                # Account for mixture weight
-                estimates.append(likelihood_ratio / weights[tilt_idx])
+                log_likelihood_ratio = self._mixture_log_likelihood_ratio(
+                    position=position,
+                    n_steps=n_steps,
+                    tilts=tilts,
+                    weights=weights,
+                )
+                estimates.append(np.exp(log_likelihood_ratio))
             else:
                 estimates.append(0.0)
 
