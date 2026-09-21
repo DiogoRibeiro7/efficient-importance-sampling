@@ -37,8 +37,8 @@ def test_rate_function_is_zero_at_the_mean() -> None:
     assert cgf.rate_function_I(mean) == pytest.approx(0.0)
 
 
-def test_optimal_theta_maps_back_to_requested_point() -> None:
-    """The exponential tilt should map the Gaussian mean to the target point."""
+def test_optimal_theta_attains_constrained_rate_function() -> None:
+    """The analytical tilt must lie on the CGF boundary and attain the support."""
     mean = np.array([-0.5, -0.25])
     covariance = np.array([[1.0, 0.1], [0.1, 1.5]])
     target = np.array([0.2, 0.4])
@@ -46,7 +46,38 @@ def test_optimal_theta_maps_back_to_requested_point() -> None:
 
     theta = cgf.optimal_theta(target)
 
-    np.testing.assert_allclose(cgf.grad_Lambda(theta), target)
+    assert cgf.Lambda(theta) == pytest.approx(0.0, abs=1e-12)
+    assert theta @ target == pytest.approx(cgf.rate_function_I(target))
+
+    # The KKT condition requires the boundary normal to be parallel to x.
+    gradient = cgf.grad_Lambda(theta)
+    assert gradient[0] * target[1] == pytest.approx(
+        gradient[1] * target[0],
+        abs=1e-12,
+    )
+
+
+def test_rate_function_handles_degenerate_directions() -> None:
+    """A zero objective or zero Gaussian drift has the zero tilt as a maximiser."""
+    drifted = CumulantFunction(np.array([-0.5, -0.25]), np.eye(2))
+    centred = CumulantFunction(np.zeros(2), np.eye(2))
+
+    assert drifted.rate_function_I(np.zeros(2)) == 0.0
+    np.testing.assert_array_equal(drifted.optimal_theta(np.zeros(2)), np.zeros(2))
+    assert centred.rate_function_I(np.array([1.0, 2.0])) == 0.0
+    np.testing.assert_array_equal(
+        centred.optimal_theta(np.array([1.0, 2.0])),
+        np.zeros(2),
+    )
+
+
+@pytest.mark.parametrize("point", [np.array([1.0]), np.array([1.0, np.nan])])
+def test_rate_function_validates_target_point(point: np.ndarray) -> None:
+    """Rate-function targets must match the model dimension and be finite."""
+    cgf = CumulantFunction(np.zeros(2), np.eye(2))
+
+    with pytest.raises(ValueError, match="x must"):
+        cgf.rate_function_I(point)
 
 
 def test_gap_rule_rejects_invalid_signal_count() -> None:
