@@ -143,7 +143,6 @@ def test_sum_intersection_rule_validates_order(order: int) -> None:
         )
 
 
-
 @pytest.fixture
 def simple_siegmund_problem() -> MultidimensionalSiegmund:
     """Create a small simulation problem with deterministic mixture construction."""
