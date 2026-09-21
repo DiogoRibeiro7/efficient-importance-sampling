@@ -264,8 +264,7 @@ def test_mixture_likelihood_ratio_uses_all_components() -> None:
     )
     expected = -np.log(
         sum(
-            weight
-            * np.exp(theta @ position - 3 * problem.cgf.Lambda(theta))
+            weight * np.exp(theta @ position - 3 * problem.cgf.Lambda(theta))
             for theta, weight in zip(tilts, weights)
         )
     )
