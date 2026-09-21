@@ -370,7 +370,11 @@ class MultidimensionalSiegmund:
         return all_tilts, weights, all_indices
 
     def simulate_wrong_exit_probability(
-        self, b: float, n_samples: int = 10000, use_feasible_mixture: bool = True
+        self,
+        b: float,
+        n_samples: int = 10000,
+        use_feasible_mixture: bool = True,
+        rng: Optional[np.random.Generator] = None,
     ) -> SimulationResult:
         """
         Simulate wrong exit probability P(τ* < τ⁰) using importance sampling.
@@ -379,10 +383,19 @@ class MultidimensionalSiegmund:
             b: Scaling parameter
             n_samples: Number of Monte Carlo samples
             use_feasible_mixture: If True, uses feasible mixture; if False, uses full mixture
+            rng: Random-number generator. Pass a seeded generator for reproducible runs.
 
         Returns:
             SimulationResult with estimate and diagnostics
         """
+        if not isinstance(n_samples, (int, np.integer)) or isinstance(n_samples, bool):
+            raise ValueError("n_samples must be a positive integer")
+        if n_samples <= 0:
+            raise ValueError("n_samples must be a positive integer")
+        if not np.isfinite(b) or b <= 0:
+            raise ValueError("b must be finite and positive")
+
+        generator = rng if rng is not None else np.random.default_rng()
         start_time = time.time()
 
         if use_feasible_mixture:
@@ -401,9 +414,9 @@ class MultidimensionalSiegmund:
 
         estimates = []
 
-        for sample_idx in range(n_samples):
+        for _ in range(n_samples):
             # Choose tilt from mixture
-            tilt_idx = np.random.choice(len(tilts), p=weights)
+            tilt_idx = generator.choice(len(tilts), p=weights)
             theta = tilts[tilt_idx]
 
             # Generate tilted random walk
@@ -416,7 +429,7 @@ class MultidimensionalSiegmund:
 
             while n_steps < max_steps:
                 # Take step
-                step = np.random.multivariate_normal(tilted_mean, self.cgf.cov)
+                step = generator.multivariate_normal(tilted_mean, self.cgf.cov)
                 position += step
                 n_steps += 1
 
@@ -631,10 +644,11 @@ class SumIntersectionRule:
         return tilts, weights
 
 
-def run_comprehensive_example() -> None:
-    """
-    Run comprehensive example demonstrating all three problems.
-    """
+def run_comprehensive_example(
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[MultidimensionalSiegmund, GapRule, SumIntersectionRule]:
+    """Run a comprehensive example demonstrating all three problems."""
+    generator = rng if rng is not None else np.random.default_rng()
     print("=== Comprehensive Efficient Importance Sampling Demo ===\n")
 
     # Example 1: Multidimensional Siegmund Problem
@@ -657,7 +671,7 @@ def run_comprehensive_example() -> None:
     for b in b_values:
         # Feasible mixture
         result_feasible = siegmund.simulate_wrong_exit_probability(
-            b, n_samples=5000, use_feasible_mixture=True
+            b, n_samples=5000, use_feasible_mixture=True, rng=generator
         )
 
         print(f"b = {b}:")
@@ -670,7 +684,7 @@ def run_comprehensive_example() -> None:
         # Compare with full mixture for small d
         if d <= 6:
             result_full = siegmund.simulate_wrong_exit_probability(
-                b, n_samples=1000, use_feasible_mixture=False
+                b, n_samples=1000, use_feasible_mixture=False, rng=generator
             )
             print(
                 f"  Full mixture: P = {result_full.estimate:.2e} ± {result_full.std_error:.2e}"
@@ -728,11 +742,10 @@ def run_comprehensive_example() -> None:
 
 
 if __name__ == "__main__":
-    # Set random seed for reproducibility
-    np.random.seed(42)
+    demo_rng = np.random.default_rng(42)
 
     # Run comprehensive example
-    siegmund_prob, gap_prob, sum_int_prob = run_comprehensive_example()
+    siegmund_prob, gap_prob, sum_int_prob = run_comprehensive_example(rng=demo_rng)
 
     # Additional performance analysis
     print("\n=== Performance Analysis ===")
@@ -750,14 +763,14 @@ if __name__ == "__main__":
 
         # Time feasible mixture
         result = prob.simulate_wrong_exit_probability(
-            2.0, n_samples=1000, use_feasible_mixture=True
+            2.0, n_samples=1000, use_feasible_mixture=True, rng=demo_rng
         )
         times_feasible.append(result.computation_time)
 
         # Time full mixture (only for small d)
         if d <= 4:
             result_full = prob.simulate_wrong_exit_probability(
-                2.0, n_samples=100, use_feasible_mixture=False
+                2.0, n_samples=100, use_feasible_mixture=False, rng=demo_rng
             )
             times_full.append(result_full.computation_time)
         else:
