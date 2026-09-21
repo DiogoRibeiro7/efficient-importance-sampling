@@ -144,7 +144,9 @@ def test_sum_intersection_rule_validates_order(order: int) -> None:
 
 
 @pytest.fixture
-def simple_siegmund_problem() -> MultidimensionalSiegmund:
+def simple_siegmund_problem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> MultidimensionalSiegmund:
     """Create a small simulation problem with deterministic mixture construction."""
     problem = MultidimensionalSiegmund(
         d=1,
@@ -153,7 +155,11 @@ def simple_siegmund_problem() -> MultidimensionalSiegmund:
         mean=np.array([-0.5]),
         covariance=np.eye(1),
     )
-    problem.get_feasible_mixture = lambda: ([np.array([0.0])], [1.0], [1])
+    monkeypatch.setattr(
+        problem,
+        "get_feasible_mixture",
+        lambda: ([np.array([0.0])], [1.0], [1]),
+    )
     return problem
 
 
