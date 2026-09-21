@@ -78,19 +78,44 @@ class CumulantFunction:
         """Hessian ∇²Λ(θ)."""
         return self.cov
 
+    def _validate_point(self, x: np.ndarray) -> np.ndarray:
+        """Return a finite vector compatible with the Gaussian dimension."""
+        point = np.asarray(x, dtype=float)
+        if point.shape != (self.d,):
+            raise ValueError(f"x must have shape ({self.d},)")
+        if not np.all(np.isfinite(point)):
+            raise ValueError("x must contain only finite values")
+        return point
+
     def rate_function_I(self, x: np.ndarray) -> float:
-        """
-        Rate function I(x) = sup{θ·x : Λ(θ) ≤ 0}.
-        For multivariate normal, this has a closed form.
-        """
-        # I(x) = sup{θ·x - Λ(θ) : θ ∈ R^d}
-        # For multivariate normal: I(x) = (1/2)(x-μ)^T Σ^{-1} (x-μ)
-        diff = x - self.mean
-        return 0.5 * np.dot(diff, self.cov_inv @ diff)
+        """Compute the support function I(x) = sup{θ·x : Λ(θ) ≤ 0}."""
+        point = self._validate_point(x)
+        precision_mean = self.cov_inv @ self.mean
+        precision_point = self.cov_inv @ point
+        mean_norm_squared = float(self.mean @ precision_mean)
+        point_norm_squared = float(point @ precision_point)
+
+        if mean_norm_squared <= 0.0 or point_norm_squared <= 0.0:
+            return 0.0
+
+        return float(
+            -self.mean @ precision_point
+            + np.sqrt(mean_norm_squared * point_norm_squared)
+        )
 
     def optimal_theta(self, x: np.ndarray) -> np.ndarray:
-        """Optimal θ achieving I(x)."""
-        return self.cov_inv @ (x - self.mean)
+        """Return a maximiser of θ·x subject to Λ(θ) ≤ 0."""
+        point = self._validate_point(x)
+        precision_mean = self.cov_inv @ self.mean
+        precision_point = self.cov_inv @ point
+        mean_norm_squared = float(self.mean @ precision_mean)
+        point_norm_squared = float(point @ precision_point)
+
+        if mean_norm_squared <= 0.0 or point_norm_squared <= 0.0:
+            return np.zeros(self.d)
+
+        scale = np.sqrt(mean_norm_squared / point_norm_squared)
+        return -precision_mean + scale * precision_point
 
 
 class RegionOptimizer:
