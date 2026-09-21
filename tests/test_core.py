@@ -141,3 +141,66 @@ def test_sum_intersection_rule_validates_order(order: int) -> None:
             mean=-np.ones(3),
             covariance=np.eye(3),
         )
+
+
+
+@pytest.fixture
+def simple_siegmund_problem() -> MultidimensionalSiegmund:
+    """Create a small simulation problem with deterministic mixture construction."""
+    problem = MultidimensionalSiegmund(
+        d=1,
+        ell=1.0,
+        u=1.0,
+        mean=np.array([-0.5]),
+        covariance=np.eye(1),
+    )
+    problem.get_feasible_mixture = lambda: ([np.array([0.0])], [1.0], [1])
+    return problem
+
+
+def test_simulation_is_reproducible_with_seeded_generator(
+    simple_siegmund_problem: MultidimensionalSiegmund,
+) -> None:
+    """Equal generator seeds must produce equal Monte Carlo diagnostics."""
+    first = simple_siegmund_problem.simulate_wrong_exit_probability(
+        b=1.0,
+        n_samples=50,
+        rng=np.random.default_rng(2025),
+    )
+    second = simple_siegmund_problem.simulate_wrong_exit_probability(
+        b=1.0,
+        n_samples=50,
+        rng=np.random.default_rng(2025),
+    )
+
+    assert first.estimate == second.estimate
+    assert first.std_error == second.std_error
+    assert first.relative_error == second.relative_error
+    assert first.log_probability == second.log_probability
+    assert first.samples_used == second.samples_used == 50
+
+
+@pytest.mark.parametrize("n_samples", [0, -1, 1.5, True])
+def test_simulation_rejects_invalid_sample_counts(
+    simple_siegmund_problem: MultidimensionalSiegmund,
+    n_samples: object,
+) -> None:
+    """Sample counts must be positive integers."""
+    with pytest.raises(ValueError, match="positive integer"):
+        simple_siegmund_problem.simulate_wrong_exit_probability(
+            b=1.0,
+            n_samples=n_samples,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("boundary_scale", [0.0, -1.0, np.inf, np.nan])
+def test_simulation_rejects_invalid_boundary_scale(
+    simple_siegmund_problem: MultidimensionalSiegmund,
+    boundary_scale: float,
+) -> None:
+    """The simulation scale must define finite positive stopping boundaries."""
+    with pytest.raises(ValueError, match="finite and positive"):
+        simple_siegmund_problem.simulate_wrong_exit_probability(
+            b=boundary_scale,
+            n_samples=1,
+        )
