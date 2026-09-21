@@ -59,8 +59,8 @@ The implementation includes:
 git clone https://github.com/diogoribeiro7/efficient-importance-sampling.git
 cd efficient-importance-sampling
 
-# Install dependencies
-pip install -r requirements.txt
+# Install the package and development tools
+python -m pip install -e ".[dev]"
 ```
 
 ### Requirements
@@ -141,7 +141,7 @@ tilts, weights = sum_int.compute_feasible_mixture()
 ## Running the Demo
 
 ```bash
-python efficient_importance_sampling.py
+python -m efficient_importance_sampling
 ```
 
 This will run comprehensive examples for all three problems with:
