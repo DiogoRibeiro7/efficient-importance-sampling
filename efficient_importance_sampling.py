@@ -312,7 +312,7 @@ class MultidimensionalSiegmund:
             singleton_indices.append(subset_idx)
 
         # Find r* = min r_{k}
-        r_star = min(singleton_rates)
+        _r_star = min(singleton_rates)
 
         # Additional tilts γ^k from equation (27)
         additional_tilts = []
@@ -365,7 +365,7 @@ class MultidimensionalSiegmund:
         start_time = time.time()
 
         if use_feasible_mixture:
-            tilts, weights, indices = self.get_feasible_mixture()
+            tilts, weights, _indices = self.get_feasible_mixture()
         else:
             # Use full mixture (exponentially many components)
             if self.d > 10:
@@ -376,7 +376,7 @@ class MultidimensionalSiegmund:
             all_tilts = self.compute_optimal_tilts()
             tilts = [beta for beta, _ in all_tilts.values()]
             weights = [1.0 / len(tilts)] * len(tilts)
-            indices = list(all_tilts.keys())
+            _indices = list(all_tilts.keys())
 
         estimates = []
 
