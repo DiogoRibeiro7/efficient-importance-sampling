@@ -11,10 +11,7 @@ This implements the full mathematical framework including:
 
 import numpy as np
 import scipy.optimize as opt
-from scipy.stats import multivariate_normal, norm
-from scipy.special import logsumexp
-import matplotlib.pyplot as plt
-from typing import List, Tuple, Dict, Callable, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 import itertools
 import warnings
 from dataclasses import dataclass

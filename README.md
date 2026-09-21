@@ -1,6 +1,6 @@
 # Efficient Importance Sampling for Rare Events
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A complete implementation of efficient importance sampling techniques for estimating wrong exit probabilities in systems with combinatorially many rare regions, based on **Song & Fellouris (2025)**.
 
@@ -66,9 +66,8 @@ python -m pip install -e ".[dev]"
 ### Requirements
 
 ```
-numpy>=1.19.0
-scipy>=1.5.0
-matplotlib>=3.3.0
+numpy>=1.26,<2.3
+scipy>=1.11
 ```
 
 ## Quick Start
