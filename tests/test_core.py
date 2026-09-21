@@ -242,7 +242,6 @@ def test_simulation_rejects_invalid_boundary_scale(
         )
 
 
-
 def test_mixture_likelihood_ratio_uses_all_components() -> None:
     """The path weight must be evaluated against the complete proposal mixture."""
     problem = MultidimensionalSiegmund(
