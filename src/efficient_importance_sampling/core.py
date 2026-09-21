@@ -416,18 +416,29 @@ class MultidimensionalSiegmund:
         n_samples: int = 10000,
         use_feasible_mixture: bool = True,
         rng: Optional[np.random.Generator] = None,
+        *,
+        max_steps: Optional[int] = None,
     ) -> SimulationResult:
         """
         Simulate wrong exit probability P(τ* < τ⁰) using importance sampling.
+
+        Stop when every coordinate is strictly above b*u or below -b*ell
+        at the same time. A path on either boundary has not yet exited.
 
         Args:
             b: Scaling parameter
             n_samples: Number of Monte Carlo samples
             use_feasible_mixture: If True, uses feasible mixture; if False, uses full mixture
             rng: Random-number generator. Pass a seeded generator for reproducible runs.
+            max_steps: Positive per-path step limit. Defaults to int(10*b) + 1000.
 
         Returns:
             SimulationResult with estimate and diagnostics
+
+        Raises:
+            ValueError: If the scale, sample count, or step limit is invalid.
+            RuntimeError: If a path has not exited within max_steps. No estimate
+                is returned because counting incomplete paths as zero is biased.
         """
         if not isinstance(n_samples, (int, np.integer)) or isinstance(n_samples, bool):
             raise ValueError("n_samples must be a positive integer")
@@ -435,6 +446,17 @@ class MultidimensionalSiegmund:
             raise ValueError("n_samples must be a positive integer")
         if not np.isfinite(b) or b <= 0:
             raise ValueError("b must be finite and positive")
+        if max_steps is not None:
+            if (
+                not isinstance(max_steps, (int, np.integer))
+                or isinstance(max_steps, bool)
+                or max_steps <= 0
+            ):
+                raise ValueError("max_steps must be a positive integer")
+
+        step_limit: int = int(10 * b) + 1000 if max_steps is None else int(max_steps)
+        lower_boundary: float = -b * self.ell
+        upper_boundary: float = b * self.u
 
         generator = rng if rng is not None else np.random.default_rng()
         start_time = time.time()
@@ -455,7 +477,7 @@ class MultidimensionalSiegmund:
 
         estimates = []
 
-        for _ in range(n_samples):
+        for sample_idx in range(n_samples):
             # Choose tilt from mixture
             tilt_idx = generator.choice(len(tilts), p=weights)
             theta = tilts[tilt_idx]
@@ -465,30 +487,20 @@ class MultidimensionalSiegmund:
 
             # Simulate until stopping time
             position = np.zeros(self.d)
-            n_steps = 0
-            max_steps = int(10 * b) + 1000  # Adaptive max steps
 
-            while n_steps < max_steps:
+            for n_steps in range(1, step_limit + 1):
                 # Take step
                 step = generator.multivariate_normal(tilted_mean, self.cgf.cov)
                 position += step
-                n_steps += 1
-
-                # Check stopping condition: |S_{n,k}| > b*boundary for all k
-                stopped = True
-                for k in range(self.d):
-                    if abs(position[k]) <= b * min(self.u, self.ell):
-                        stopped = False
-                        break
-
-                if stopped:
+                # Each coordinate must be outside its own asymmetric interval now.
+                if np.all((position > upper_boundary) | (position < lower_boundary)):
                     break
-
-            # Determine exit type
-            if n_steps >= max_steps:
-                # Didn't stop - treat as no wrong exit
-                estimates.append(0.0)
-                continue
+            else:
+                # A break on the final allowed step is still a valid exit.
+                raise RuntimeError(
+                    f"Sample {sample_idx + 1} did not exit within max_steps={step_limit}. "
+                    "Increase max_steps and rerun the simulation."
+                )
 
             # Check if wrong exit (at least one coordinate positive)
             wrong_exit = any(position[k] > 0 for k in range(self.d))
