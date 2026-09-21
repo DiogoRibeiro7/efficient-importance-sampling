@@ -240,3 +240,54 @@ def test_simulation_rejects_invalid_boundary_scale(
             b=boundary_scale,
             n_samples=1,
         )
+
+
+
+def test_mixture_likelihood_ratio_uses_all_components() -> None:
+    """The path weight must be evaluated against the complete proposal mixture."""
+    problem = MultidimensionalSiegmund(
+        d=1,
+        ell=1.0,
+        u=1.0,
+        mean=np.array([-0.5]),
+        covariance=np.eye(1),
+    )
+    position = np.array([2.0])
+    tilts = [np.array([0.0]), np.array([1.0])]
+    weights = [0.25, 0.75]
+
+    actual = problem._mixture_log_likelihood_ratio(
+        position=position,
+        n_steps=3,
+        tilts=tilts,
+        weights=weights,
+    )
+    expected = -np.log(
+        sum(
+            weight
+            * np.exp(theta @ position - 3 * problem.cgf.Lambda(theta))
+            for theta, weight in zip(tilts, weights)
+        )
+    )
+
+    assert actual == pytest.approx(expected)
+
+
+def test_duplicate_zero_tilts_preserve_unit_likelihood_ratio() -> None:
+    """Mixture weights must not multiply an unchanged proposal distribution."""
+    problem = MultidimensionalSiegmund(
+        d=1,
+        ell=1.0,
+        u=1.0,
+        mean=np.array([-0.5]),
+        covariance=np.eye(1),
+    )
+
+    actual = problem._mixture_log_likelihood_ratio(
+        position=np.array([3.0]),
+        n_steps=5,
+        tilts=[np.zeros(1), np.zeros(1)],
+        weights=[0.1, 0.9],
+    )
+
+    assert actual == pytest.approx(0.0)
