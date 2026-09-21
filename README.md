@@ -275,13 +275,24 @@ If you use this code in your research, please cite:
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes:
+Install the development dependencies and repository hooks before making changes:
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+```bash
+python -m pip install -e ".[dev]"
+pre-commit install
+pre-commit install --hook-type pre-push
+```
+
+Commit hooks run Ruff and mypy. The pre-push hook also runs the test suite. To verify the
+entire repository manually:
+
+```bash
+pre-commit run --all-files
+pre-commit run --all-files --hook-stage pre-push
+```
+
+Create a focused branch from `main`, add tests for behavioural changes, and open a pull
+request back to `main`. Do not commit generated environments, caches, or local results.
 
 ## License
 
