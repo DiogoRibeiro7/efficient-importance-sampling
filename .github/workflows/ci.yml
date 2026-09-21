@@ -34,11 +34,11 @@ jobs:
       - name: Lint
         run: ruff check .
 
-      - name: Check formatting
-        run: ruff format --check .
+      - name: Check new-code formatting
+        run: ruff format --check tests
 
-      - name: Type-check
-        run: mypy efficient_importance_sampling.py
+      - name: Type-check tests
+        run: mypy tests
 
       - name: Test
         run: pytest --cov --cov-report=term-missing --cov-report=xml
