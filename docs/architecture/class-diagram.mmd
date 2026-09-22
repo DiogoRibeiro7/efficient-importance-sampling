@@ -2,6 +2,12 @@ classDiagram
   class SimulationResult {
   }
 
+  class SumIntersectionEfficiencyResult {
+    +required_bound()
+    +margin()
+    +status()
+  }
+
   class CumulantFunction {
     +mean
     +cov
@@ -24,9 +30,9 @@ classDiagram
     +constraint()
     +constraint_gradient()
     +solve_sum_intersection_auxiliary()
+    +solve_sum_intersection_coverage()
     +constraint()
     +constraint_gradient()
-    +solve_kkt_system()
   }
 
   class MultidimensionalSiegmund {
@@ -55,5 +61,6 @@ classDiagram
     +cgf
     +optimizer
     +compute_feasible_mixture()
+    +check_efficiency_condition()
   }
 
