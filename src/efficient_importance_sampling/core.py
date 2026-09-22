@@ -152,6 +152,23 @@ class RegionOptimizer:
         self.cgf = cgf
         self.d = cgf.d
 
+    def _region_signs(self, A_indices: List[int]) -> np.ndarray:
+        """Validate a nonempty coordinate subset and return its orthant signs."""
+        if (
+            not A_indices
+            or len(set(A_indices)) != len(A_indices)
+            or any(
+                isinstance(k, (bool, np.bool_))
+                or not isinstance(k, (int, np.integer))
+                or not 0 <= k < self.d
+                for k in A_indices
+            )
+        ):
+            raise ValueError("A_indices must contain distinct valid coordinate indices")
+        signs: np.ndarray = -np.ones(self.d)
+        signs[A_indices] = 1.0
+        return signs
+
     def _solve_siegmund_region(
         self, A_indices: List[int], u: float, ell: float
     ) -> Tuple[np.ndarray, float]:
@@ -166,22 +183,10 @@ class RegionOptimizer:
             ValueError: If the region indices or boundaries are invalid.
             RuntimeError: If the solver's candidate fails mathematical validation.
         """
-        if (
-            not A_indices
-            or len(set(A_indices)) != len(A_indices)
-            or any(
-                isinstance(k, (bool, np.bool_))
-                or not isinstance(k, (int, np.integer))
-                or not 0 <= k < self.d
-                for k in A_indices
-            )
-        ):
-            raise ValueError("A_indices must contain distinct valid coordinate indices")
+        signs: np.ndarray = self._region_signs(A_indices)
         if not np.isfinite(u) or not np.isfinite(ell) or u <= 0 or ell <= 0:
             raise ValueError("Boundaries ell and u must be finite and positive")
 
-        signs: np.ndarray = -np.ones(self.d)
-        signs[A_indices] = 1.0
         # If every orthant direction has nonnegative drift, only zero is feasible.
         if np.all(signs * self.cgf.mean >= 0.0):
             return np.zeros(self.d), 0.0
@@ -254,10 +259,123 @@ class RegionOptimizer:
         corner: np.ndarray = np.where(signs > 0.0, u, -ell)
         return theta, float(corner @ theta)
 
+    def _solve_gap_region(self, A_indices: List[int]) -> Tuple[np.ndarray, float]:
+        """Maximise sum(theta[A]) with Gaussian, sign, and zero-sum constraints.
+
+        The zero-sum condition makes gap tilts invariant to common drift and
+        common Gaussian noise. Centre the mean and covariance on that subspace
+        before scaling the convex problem. SLSQP supplies a candidate, which is
+        accepted only after independent feasibility and KKT checks.
+
+        Raises:
+            ValueError: If A_indices is not a nonempty proper coordinate subset.
+            RuntimeError: If the numerical candidate cannot be validated.
+        """
+        signs: np.ndarray = self._region_signs(A_indices)
+        selected: np.ndarray = signs > 0.0
+        if np.all(selected):
+            raise ValueError("A gap region must be a proper coordinate subset")
+
+        # Every balanced orthant direction is a sum of selected-minus-other pairs.
+        first: int = int(np.flatnonzero(selected)[np.argmin(self.cgf.mean[selected])])
+        second: int = int(np.flatnonzero(~selected)[np.argmax(self.cgf.mean[~selected])])
+        if self.cgf.mean[first] >= self.cgf.mean[second]:
+            return np.zeros(self.d), 0.0
+
+        mean: np.ndarray = self.cgf.mean - np.mean(self.cgf.mean)
+        row_means: np.ndarray = np.mean(self.cgf.cov, axis=1)
+        covariance: np.ndarray = (
+            self.cgf.cov - row_means[:, None] - row_means[None, :] + np.mean(row_means)
+        )
+        drift_scale: float = float(np.max(np.abs(mean)))
+        variance_scale: float = float(np.max(np.diag(covariance)))
+        if (
+            not np.isfinite(drift_scale)
+            or not np.isfinite(variance_scale)
+            or drift_scale <= 0.0
+            or variance_scale <= 0.0
+        ):
+            raise RuntimeError("Gap region scaling is numerically degenerate")
+        tilt_scale: float = drift_scale / variance_scale
+        drift: np.ndarray = signs * mean / drift_scale
+        quadratic: np.ndarray = covariance * np.outer(signs, signs) / variance_scale
+        objective: np.ndarray = selected.astype(float)
+
+        def constraint(y: np.ndarray) -> float:
+            return -float(drift @ y + 0.5 * y @ quadratic @ y)
+
+        def constraint_gradient(y: np.ndarray) -> np.ndarray:
+            return -(drift + quadratic @ y)
+
+        # This pair has negative projected drift and satisfies the balance exactly.
+        direction: np.ndarray = np.zeros(self.d)
+        direction[[first, second]] = 1.0
+        initial: np.ndarray = direction * float(
+            -(drift @ direction) / (direction @ quadratic @ direction)
+        )
+        result = opt.minimize(
+            lambda y: -float(objective @ y),
+            initial,
+            jac=lambda y: -objective,
+            method="SLSQP",
+            bounds=[(0.0, None)] * self.d,
+            constraints=[
+                {"type": "ineq", "fun": constraint, "jac": constraint_gradient},
+                {"type": "eq", "fun": lambda y: float(signs @ y), "jac": lambda y: signs},
+            ],
+            options={"ftol": 1e-10, "maxiter": 500, "disp": False},
+        )
+        diagnostic: str = f": {result.message}" if not result.success else ""
+        y: np.ndarray = np.asarray(result.x, dtype=float)
+        if y.shape != (self.d,) or not np.all(np.isfinite(y)):
+            raise RuntimeError(f"Gap region optimisation returned an invalid tilt{diagnostic}")
+        constraint_residual: float = constraint(y)
+        if (
+            np.any(y < 0.0)
+            or not np.isfinite(constraint_residual)
+            or abs(constraint_residual) > 1e-8
+            or abs(float(signs @ y)) > 1e-8 * max(1.0, float(np.sum(y)))
+        ):
+            raise RuntimeError(f"Gap region optimisation returned an infeasible tilt{diagnostic}")
+
+        positive_mass: float = float(np.sum(y[selected]))
+        negative_mass: float = float(np.sum(y[~selected]))
+        if positive_mass <= 0.0 or negative_mass <= 0.0:
+            raise RuntimeError(f"Gap region optimisation returned a nonoptimal zero tilt{diagnostic}")
+        # Correct only accepted round-off residuals, preserving the orthant.
+        y = y.copy()
+        y[selected] *= negative_mass / positive_mass
+        variance: float = float(y @ quadratic @ y)
+        projected_drift: float = float(drift @ y)
+        if variance <= 0.0 or projected_drift >= 0.0:
+            raise RuntimeError(f"Gap region optimisation returned a degenerate tilt{diagnostic}")
+        y *= -2.0 * projected_drift / variance
+
+        gradient: np.ndarray = -constraint_gradient(y)
+        normal_product: float = float(gradient @ y)
+        if not np.isfinite(normal_product) or normal_product <= 0.0:
+            raise RuntimeError(f"Gap region optimisation returned a degenerate normal{diagnostic}")
+        multiplier: float = float(objective @ y) / normal_product
+        # Recover the equality multiplier from stationarity on positive entries.
+        balance_multiplier: float = float(
+            (y * signs) @ (objective - multiplier * gradient) / np.sum(y)
+        )
+        stationarity: np.ndarray = multiplier * gradient + balance_multiplier * signs
+        slack: np.ndarray = stationarity - objective
+        residual_scale: np.ndarray = np.maximum(1.0, np.abs(stationarity))
+        if (
+            np.any(slack < -1e-6 * residual_scale)
+            or np.any(np.abs(y * slack) > 1e-6 * residual_scale * np.maximum(1.0, y))
+        ):
+            raise RuntimeError(f"Gap region optimisation failed the KKT residual check{diagnostic}")
+
+        theta: np.ndarray = tilt_scale * signs * y
+        return theta, float(np.sum(theta[selected]))
+
     def solve_kkt_system(
         self,
         A_indices: List[int],
-        constraints: Dict[str, Dict[str, Union[int, float, bool]]],
+        constraints: Dict[str, Union[bool, Dict[str, Union[int, float, bool]]]],
     ) -> Tuple[np.ndarray, float]:
         """
         Solve KKT system for optimal tilt and rate.
@@ -270,7 +388,7 @@ class RegionOptimizer:
             (beta, rate): Optimal exponential tilt and minimal rate
 
         Raises:
-            RuntimeError: If a Siegmund region cannot be solved and validated.
+            RuntimeError: If a Siegmund or gap region cannot be solved and validated.
         """
         if "siegmund" in constraints:
             return self._solve_siegmund_region(
@@ -278,6 +396,8 @@ class RegionOptimizer:
                 u=float(constraints["siegmund"]["u"]),
                 ell=float(constraints["siegmund"]["ell"]),
             )
+        if "gap" in constraints:
+            return self._solve_gap_region(A_indices)
 
         def objective_and_constraints(theta: np.ndarray) -> Tuple[float, float]:
             """Combined objective and constraint function."""
