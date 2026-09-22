@@ -32,7 +32,8 @@ Estimates wrong selection probability in sequential multiple testing with gap-ba
 
 **Application**: Clinical trials, A/B testing with multiple variants
 
-**Complexity Reduction**: O(2^d) → O(m(d-m))
+**Mixture size**: $2m(d-m)$ component slots, compared with $\binom{d}{m}-1$
+wrong-selection regions in the full mixture.
 
 ### 3\. **Sum-Intersection Rule** (Section 6)
 
@@ -122,6 +123,8 @@ treated as zero contributions, which would bias the probability estimate.
 ### Example 2: Gap Rule
 
 ```python
+import numpy as np
+
 from efficient_importance_sampling import GapRule
 
 # Sequential testing: 3 signals among 6 hypotheses
@@ -132,10 +135,55 @@ gap_rule = GapRule(
     covariance=np.eye(6)
 )
 
-# Compute efficient mixture (polynomial complexity)
+# Construct the region and pairwise auxiliary proposal families.
 tilts, weights = gap_rule.compute_feasible_mixture()
-print(f"Mixture components: {len(tilts)} (vs 2^6-1=63 naively)")
+print(f"Mixture components: {len(tilts)} (vs binom(6,3)-1=19 in the full mixture)")
+
+result = gap_rule.simulate_wrong_exit_probability(
+    b=2.0,
+    n_samples=5000,
+    rng=np.random.default_rng(42),
+    max_steps=2000,
+)
+print(f"Wrong selection probability: {result.estimate:.6g} (SE {result.std_error:.3g})")
+print(f"Log probability estimate: {result.log_probability:.6f}")
 ```
+
+### Gap-rule stopping and selection
+
+Let $S_{n,(1)}\geq\cdots\geq S_{n,(d)}$ be the signed coordinates in decreasing
+order, and let $A_n$ contain the indices of the largest $m$ coordinates. The
+simulator uses
+
+$$
+T=\inf\{n\geq1:S_{n,(m)}-S_{n,(m+1)}>b\},\qquad
+E=\{A_T\neq\{0,\ldots,m-1\}\}.
+$$
+
+The strict inequality follows the open regions in equation (35) of
+[Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1). Equality at the
+threshold does not stop a path. Ties within a selected or unselected group are
+allowed once the gap between the groups exceeds $b$. Selection depends on rank
+and coordinate identity, not the signs of the terminal values.
+
+The first $m$ coordinates represent the true signals. Their smallest drift must
+strictly exceed the largest remaining drift. A common offset is allowed, so all
+drifts may have the same sign, consistent with Remark 5.1. Both `d` and `m` must
+be integers, with `d >= 2` and `1 <= m < d`.
+
+One proposal component is sampled per path and held fixed; its contribution uses
+the complete mixture density, including every component's CGF and the stopping
+time. At least two paths are required, and the sample standard error uses
+`ddof=1`. Scaled accumulation preserves `log_probability` and `relative_error`
+when ordinary estimates underflow. If no wrong selections occur, the empirical
+estimate and standard error are zero, the log estimate is `-inf`, and the relative
+error is `inf`; this does not establish a zero probability or zero uncertainty.
+
+The step limit defaults to `10 * int(b) + 1000`. An exit on the final permitted
+step counts. Any unfinished path raises `RuntimeError` without a partial
+estimate; increase `max_steps` and rerun the whole experiment with a fresh
+generator initialised to the same seed. The estimator does not check the
+sufficient efficiency conditions in Theorem 5.2.
 
 ### Example 3: Sum-Intersection Rule
 
@@ -457,6 +505,12 @@ Implements the multidimensional Siegmund problem with boundary crossings.
 #### `GapRule`
 
 Handles sequential multiple testing with gap-based stopping rules.
+
+`simulate_wrong_exit_probability(b, n_samples=10000, rng=None, *, max_steps=None)`
+returns a `SimulationResult` for incorrect top-$m$ selection. The first $m$
+coordinate drifts must strictly exceed every remaining drift. Invalid arguments
+raise `ValueError`; failed proposals and unfinished paths raise `RuntimeError`
+without returning a partial estimate.
 
 #### `SumIntersectionRule`
 
