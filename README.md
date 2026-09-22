@@ -36,7 +36,8 @@ Estimates wrong selection probability in sequential multiple testing with gap-ba
 
 ### 3\. **Sum-Intersection Rule** (Section 6)
 
-Handles stopping rules based on sums of smallest coordinates with decreasing rearrangements.
+Estimates the probability of at least $L$ positive coordinates when the sum of
+the $L$ smallest absolute coordinates first exceeds the stopping threshold.
 
 **Application**: Rank-based sequential tests, order statistics
 
@@ -139,9 +140,11 @@ print(f"Mixture components: {len(tilts)} (vs 2^6-1=63 naively)")
 ### Example 3: Sum-Intersection Rule
 
 ```python
+import numpy as np
+
 from efficient_importance_sampling import SumIntersectionRule
 
-# Stopping based on L smallest coordinates
+# Stop using the L smallest absolute coordinates.
 sum_int = SumIntersectionRule(
     d=5,
     L=2,
@@ -155,7 +158,55 @@ print(f"Mixture components: {len(tilts)}")  # 20 = 2 * binom(5, 2)
 diagnostic = sum_int.check_efficiency_condition()
 print(diagnostic.status)  # "satisfied" for this independent Gaussian model
 print(f"H-SI margin: {diagnostic.margin:.6f}")  # 0.500000
+
+result = sum_int.simulate_wrong_exit_probability(
+    b=2.0,
+    n_samples=5000,
+    rng=np.random.default_rng(42),
+    max_steps=2000,
+)
+print(f"Wrong exit probability: {result.estimate:.6g} (SE {result.std_error:.3g})")
+print(f"Log probability estimate: {result.log_probability:.6f}")
 ```
+
+For this simulator, `n_samples` must be an integer of at least two and every
+coordinate drift must be strictly negative. The sample standard error uses
+`ddof=1`. Proposal construction and simulation do not run the efficiency
+diagnostic automatically.
+
+### Sum-intersection stopping and likelihood
+
+Write $|S_n|_{[1]}\leq\cdots\leq|S_n|_{[d]}$ for the absolute coordinates
+in increasing order. The simulator uses
+
+$$
+T=\inf\left\{n\geq1:\sum_{j=1}^{L}|S_n|_{[j]}>b\right\},\qquad
+E=\left\{\#\{k:S_{T,k}>0\}\geq L\right\}.
+$$
+
+Equality at the threshold does not stop a path. Coordinate signs are evaluated
+at stopping, and a zero coordinate is not positive. One proposal component is
+drawn per path and held fixed. For terminal position $S_T$, the contribution is
+
+$$
+Z=\mathbf{1}_E\left[\sum_j w_j
+   \exp\left(\theta_j^\top S_T-T\Lambda(\theta_j)\right)\right]^{-1}.
+$$
+
+This uses the complete mixture density with its actual CGF values. The stopping
+rule and exponential path density follow Sections 6 and 2.2 of
+[Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1).
+
+Contributions are scaled before computing their mean and sample variance. This
+preserves `log_probability` and `relative_error` when a very small `estimate` or
+`std_error` rounds to zero. If no simulated path produces a wrong exit, both
+empirical values are zero, `log_probability` is `-inf`, and `relative_error` is
+`inf`; this does not show that the event is impossible or its uncertainty is zero.
+
+The per-path step limit defaults to `10 * int(b) + 1000`. An exit on the final
+permitted step counts. If any path remains unfinished, the method raises
+`RuntimeError` and returns no estimate. Increase `max_steps` and rerun the whole
+experiment with a fresh generator initialised to the same seed.
 
 ## Running the Demo
 
@@ -413,6 +464,12 @@ Implements sum-intersection stopping rules with order statistics.
 
 `check_efficiency_condition(*, rtol=1e-6, atol=1e-10)` returns a numerical (H-SI)
 diagnostic independently of `compute_feasible_mixture()`.
+
+`simulate_wrong_exit_probability(b, n_samples=10000, rng=None, *, max_steps=None)`
+returns a `SimulationResult` using the complete proposal family. It requires
+at least two paths and strictly negative coordinate drifts. Invalid parameters
+raise `ValueError`; an unfinished path or failed numerical computation raises
+`RuntimeError` without a partial estimate.
 
 ### Data Structures
 
