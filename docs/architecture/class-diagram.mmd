@@ -1,0 +1,59 @@
+classDiagram
+  class SimulationResult {
+  }
+
+  class CumulantFunction {
+    +mean
+    +cov
+    +d
+    +cov_inv
+    +cov_det
+    +Lambda()
+    +grad_Lambda()
+    +hessian_Lambda()
+    +rate_function_I()
+    +optimal_theta()
+    +optimal_ray_tilt()
+  }
+
+  class RegionOptimizer {
+    +cgf
+    +d
+    +constraint()
+    +constraint_gradient()
+    +constraint()
+    +constraint_gradient()
+    +solve_kkt_system()
+    +objective_and_constraints()
+    +lagrangian()
+    +constraint_func()
+  }
+
+  class MultidimensionalSiegmund {
+    +d
+    +ell
+    +u
+    +cgf
+    +optimizer
+    +compute_optimal_tilts()
+    +get_feasible_mixture()
+    +simulate_wrong_exit_probability()
+  }
+
+  class GapRule {
+    +d
+    +m
+    +cgf
+    +optimizer
+    +get_candidate_regions()
+    +compute_feasible_mixture()
+  }
+
+  class SumIntersectionRule {
+    +d
+    +L
+    +cgf
+    +optimizer
+    +compute_feasible_mixture()
+  }
+
