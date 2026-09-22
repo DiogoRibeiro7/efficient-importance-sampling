@@ -213,8 +213,32 @@ silently returning a zero tilt and rate. The full region cache is populated only
 after every requested region has been solved. For a one-dimensional Gaussian with
 mean $-1/2$, variance $1$, and $u=1$, the region tilt and rate are both $1$.
 
-These checks apply to the Siegmund region solver. The gap-rule and sum-intersection
-region solvers still use the legacy numerical implementation.
+### Gaussian gap-region tilts
+
+For a nonempty proper subset $A$ of selected coordinates, the gap-region tilt solves
+
+$$
+\max_\theta\sum_{k\in A}\theta_k
+\quad\text{subject to}\quad
+\Lambda(\theta)\leq 0,\quad\sum_k\theta_k=0,\quad
+\theta_k\geq 0\ (k\in A),\quad\theta_k\leq 0\ (k\notin A).
+$$
+
+The zero-sum constraint in
+[Lemma 5.1 of Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1)
+ensures that adding a common increment to every coordinate does not change the
+gap proposal. The solver centres the Gaussian mean and covariance on this
+subspace, uses analytical derivatives, and checks feasibility and KKT residuals
+before returning the tilt and rate. Small balance and boundary residuals are
+corrected before the optimality check. An unacceptable numerical candidate raises
+`RuntimeError` with a diagnostic.
+
+For independent unit-variance coordinates with means $(1/2,-1/2)$ and selected
+set $A=\{2\}$ (one-based indexing), the tilt is $(-1,1)$ and the rate is $1$.
+If all selected-coordinate drifts are at least all complementary drifts, only
+the zero tilt is feasible and the rate is zero.
+
+The sum-intersection region solver still uses the legacy numerical implementation.
 
 ### Gaussian auxiliary tilts
 
@@ -259,8 +283,8 @@ Handles cumulant generating functions and rate functions for multivariate normal
 
 #### `RegionOptimizer`
 
-Computes region tilts and rates. Siegmund regions use a convex constrained solver
-with independent feasibility and KKT checks.
+Computes region tilts and rates. Siegmund and gap regions use convex constrained
+solvers with independent feasibility and KKT checks.
 
 #### `MultidimensionalSiegmund`
 
