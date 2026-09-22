@@ -238,7 +238,38 @@ set $A=\{2\}$ (one-based indexing), the tilt is $(-1,1)$ and the rate is $1$.
 If all selected-coordinate drifts are at least all complementary drifts, only
 the zero tilt is feasible and the rate is zero.
 
-The sum-intersection region solver still uses the legacy numerical implementation.
+### Gaussian sum-intersection region tilts
+
+The region objective in
+[Lemma 6.1 of Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1) is
+
+$$
+f_L(\theta)=\min_{1\leq j\leq L}\frac{1}{j}
+\sum_{i=L-j+1}^{d}|\theta|_{(i)},
+$$
+
+where the magnitudes are sorted in decreasing order. The solver maximises this
+objective subject to the Gaussian CGF constraint and the region's coordinate
+signs. For $L=1$, it uses the Siegmund solver with both boundaries equal to one.
+
+For larger $L$, a compact equivalent formulation introduces magnitudes
+$y=|\theta|$, a rate $t$, and capacities $z$ satisfying
+
+$$
+0\leq z_i\leq y_i,\qquad z_i\leq t,\qquad
+\sum_i z_i\geq Lt,\qquad t\geq0.
+$$
+
+Eliminating $z$ gives $\sum_i\min(y_i,t)\geq Lt$, which is equivalent to the
+ordered-tail inequalities defining $t\leq f_L(\theta)$. This uses $2d+1$
+variables without enumerating all size-$L$ subsets inside each region solve.
+Returned candidates pass feasibility and an independent dual optimality check.
+Invalid candidates raise `RuntimeError`; unknown region types raise `ValueError`.
+
+The current `SumIntersectionRule.compute_feasible_mixture` still selects size-$L$
+and up to 100 size-$(L+1)$ region tilts. It does not yet construct the auxiliary
+family in equation (43) required by Theorem 6.2, so that theorem's efficiency
+guarantee does not apply to the current mixture builder.
 
 ### Gaussian auxiliary tilts
 
@@ -283,8 +314,8 @@ Handles cumulant generating functions and rate functions for multivariate normal
 
 #### `RegionOptimizer`
 
-Computes region tilts and rates. Siegmund and gap regions use convex constrained
-solvers with independent feasibility and KKT checks.
+Computes region tilts and rates using convex constrained solvers with independent
+feasibility and optimality checks.
 
 #### `MultidimensionalSiegmund`
 
