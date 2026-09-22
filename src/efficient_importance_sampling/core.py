@@ -152,6 +152,108 @@ class RegionOptimizer:
         self.cgf = cgf
         self.d = cgf.d
 
+    def _solve_siegmund_region(
+        self, A_indices: List[int], u: float, ell: float
+    ) -> Tuple[np.ndarray, float]:
+        """Maximise the region's linear objective over Lambda(theta) <= 0.
+
+        Signs encode the region orthant. Diagonal and drift scaling keep the
+        Gaussian quadratic constraint independent of the magnitude of the drift.
+        Analytical derivatives and a feasible starting point are supplied to
+        SLSQP. Feasibility and KKT residuals are checked before returning a tilt.
+
+        Raises:
+            ValueError: If the region indices or boundaries are invalid.
+            RuntimeError: If the solver's candidate fails mathematical validation.
+        """
+        if (
+            not A_indices
+            or len(set(A_indices)) != len(A_indices)
+            or any(
+                isinstance(k, (bool, np.bool_))
+                or not isinstance(k, (int, np.integer))
+                or not 0 <= k < self.d
+                for k in A_indices
+            )
+        ):
+            raise ValueError("A_indices must contain distinct valid coordinate indices")
+        if not np.isfinite(u) or not np.isfinite(ell) or u <= 0 or ell <= 0:
+            raise ValueError("Boundaries ell and u must be finite and positive")
+
+        signs: np.ndarray = -np.ones(self.d)
+        signs[A_indices] = 1.0
+        # If every orthant direction has nonnegative drift, only zero is feasible.
+        if np.all(signs * self.cgf.mean >= 0.0):
+            return np.zeros(self.d), 0.0
+
+        standard_deviations: np.ndarray = np.sqrt(np.diag(self.cgf.cov))
+        drift_scale: float = float(np.sqrt(self.cgf.mean @ self.cgf.cov_inv @ self.cgf.mean))
+        transform: np.ndarray = signs / standard_deviations
+        quadratic: np.ndarray = self.cgf.cov * np.outer(transform, transform)
+        drift: np.ndarray = transform * self.cgf.mean / drift_scale
+        objective: np.ndarray = np.where(signs > 0.0, u, ell) / standard_deviations
+        objective /= np.max(objective)
+
+        def constraint(y: np.ndarray) -> float:
+            return -float(drift @ y + 0.5 * y @ quadratic @ y)
+
+        def constraint_gradient(y: np.ndarray) -> np.ndarray:
+            return -(drift + quadratic @ y)
+
+        # Start halfway along a feasible ray, inside the quadratic sublevel set.
+        direction: np.ndarray = np.maximum(-drift, 0.0)
+        initial: np.ndarray = direction * float(
+            -(drift @ direction) / (direction @ quadratic @ direction)
+        )
+        result = opt.minimize(
+            lambda y: -float(objective @ y),
+            initial,
+            jac=lambda y: -objective,
+            method="SLSQP",
+            bounds=[(0.0, None)] * self.d,
+            constraints=[{"type": "ineq", "fun": constraint, "jac": constraint_gradient}],
+            options={"ftol": 1e-10, "maxiter": 500, "disp": False},
+        )
+        # A line-search failure can occur at the optimum. The residual checks
+        # below, rather than the status flag alone, decide whether it is usable.
+        diagnostic: str = f": {result.message}" if not result.success else ""
+
+        y: np.ndarray = np.asarray(result.x, dtype=float)
+        if y.shape != (self.d,) or not np.all(np.isfinite(y)):
+            raise RuntimeError(f"Siegmund region optimisation returned an invalid tilt{diagnostic}")
+        if np.any(y < 0.0) or abs(constraint(y)) > 1e-8:
+            raise RuntimeError(f"Siegmund region optimisation returned an infeasible tilt{diagnostic}")
+
+        # Remove small boundary residuals along the same ray before checking KKT.
+        variance: float = float(y @ quadratic @ y)
+        projected_drift: float = float(drift @ y)
+        if variance <= 0.0 or projected_drift >= 0.0:
+            raise RuntimeError(
+                f"Siegmund region optimisation returned a nonoptimal zero tilt{diagnostic}"
+            )
+        y = y * (-2.0 * projected_drift / variance)
+
+        # KKT stationarity and complementary slackness certify the convex optimum.
+        gradient: np.ndarray = -constraint_gradient(y)
+        normal_product: float = float(gradient @ y)
+        if normal_product <= 0.0:
+            raise RuntimeError(
+                f"Siegmund region optimisation returned a nonoptimal zero tilt{diagnostic}"
+            )
+        multiplier: float = float(objective @ y) / normal_product
+        slack: np.ndarray = multiplier * gradient - objective
+        residual_scale: float = max(1.0, float(np.max(np.abs(multiplier * gradient))))
+        if (
+            np.min(slack) < -1e-6 * residual_scale
+            or np.max(np.abs(y * slack))
+            > 1e-6 * residual_scale * max(1.0, float(np.max(y)))
+        ):
+            raise RuntimeError(f"Siegmund region optimisation failed the KKT residual check{diagnostic}")
+
+        theta: np.ndarray = drift_scale * transform * y
+        corner: np.ndarray = np.where(signs > 0.0, u, -ell)
+        return theta, float(corner @ theta)
+
     def solve_kkt_system(
         self,
         A_indices: List[int],
@@ -166,7 +268,16 @@ class RegionOptimizer:
 
         Returns:
             (beta, rate): Optimal exponential tilt and minimal rate
+
+        Raises:
+            RuntimeError: If a Siegmund region cannot be solved and validated.
         """
+        if "siegmund" in constraints:
+            return self._solve_siegmund_region(
+                A_indices,
+                u=float(constraints["siegmund"]["u"]),
+                ell=float(constraints["siegmund"]["ell"]),
+            )
 
         def objective_and_constraints(theta: np.ndarray) -> Tuple[float, float]:
             """Combined objective and constraint function."""
@@ -344,15 +455,20 @@ class MultidimensionalSiegmund:
             return self._tilts_cache
 
         constraints = {"siegmund": {"u": self.u, "ell": self.ell}}
+        computed_tilts: Dict[int, Tuple[np.ndarray, float]] = {}
+        computed_rates: Dict[int, float] = {}
 
         # Compute for all non-empty subsets
         for subset_idx in range(1, 2**self.d):
             A_indices = self._index_to_subset(subset_idx)
 
             beta, rate = self.optimizer.solve_kkt_system(A_indices, constraints)
-            self._tilts_cache[subset_idx] = (beta, rate)
-            self._rates_cache[subset_idx] = rate
+            computed_tilts[subset_idx] = (beta, rate)
+            computed_rates[subset_idx] = rate
 
+        # A failed region must not leave a partial result that looks complete.
+        self._tilts_cache = computed_tilts
+        self._rates_cache = computed_rates
         return self._tilts_cache
 
     def get_feasible_mixture(self) -> Tuple[List[np.ndarray], List[float], List[int]]:

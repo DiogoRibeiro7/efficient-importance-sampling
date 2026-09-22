@@ -190,6 +190,32 @@ For a rare event `E_b = ∪_{A⊆[d]} W^A_b` (union of exponentially many region
 
 4. **Theoretical guarantee**: Achieves asymptotic efficiency despite reduced complexity
 
+### Gaussian Siegmund region tilts
+
+For a nonempty set of upper-exit coordinates $A$, the region tilt maximises
+
+$$
+u\sum_{k\in A}\theta_k-\ell\sum_{k\notin A}\theta_k
+\quad\text{subject to}\quad
+\Lambda(\theta)\leq 0,\qquad
+\theta_k\geq 0\ (k\in A),\quad \theta_k\leq 0\ (k\notin A).
+$$
+
+This is the convex optimisation problem in Lemma 4.1 of
+[Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1). The implementation
+uses SLSQP with analytical derivatives, scaled variables, and a feasible initial
+point. It checks the candidate's feasibility and KKT residuals independently of
+the solver's status flag. Small numerical boundary residuals are corrected along
+the same ray before the optimality check.
+
+An unacceptable candidate raises `RuntimeError` with a diagnostic instead of
+silently returning a zero tilt and rate. The full region cache is populated only
+after every requested region has been solved. For a one-dimensional Gaussian with
+mean $-1/2$, variance $1$, and $u=1$, the region tilt and rate are both $1$.
+
+These checks apply to the Siegmund region solver. The gap-rule and sum-intersection
+region solvers still use the legacy numerical implementation.
+
 ### Gaussian auxiliary tilts
 
 For a direction $v$ and a nonnegative scale $t$, the Gaussian cumulant generating
@@ -233,7 +259,8 @@ Handles cumulant generating functions and rate functions for multivariate normal
 
 #### `RegionOptimizer`
 
-Solves KKT systems for optimal exponential tilts using Lagrange multipliers.
+Computes region tilts and rates. Siegmund regions use a convex constrained solver
+with independent feasibility and KKT checks.
 
 #### `MultidimensionalSiegmund`
 
