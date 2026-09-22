@@ -185,14 +185,21 @@ class CumulantFunction:
 
 
 def _validate_mixture_simulation_arguments(
-    b: float, n_samples: int, max_steps: Optional[int]
+    b: float,
+    n_samples: int,
+    max_steps: Optional[int],
+    *,
+    allow_single_sample: bool = False,
 ) -> int:
-    """Validate the gap/sum-intersection sampling controls and return the step limit."""
+    """Validate sampling controls and return the gap/sum-intersection step limit."""
+    minimum_samples: int = 1 if allow_single_sample else 2
     if (
         isinstance(n_samples, (bool, np.bool_))
         or not isinstance(n_samples, (int, np.integer))
-        or n_samples < 2
+        or n_samples < minimum_samples
     ):
+        if allow_single_sample:
+            raise ValueError("n_samples must be a positive integer")
         raise ValueError("n_samples must be an integer of at least two")
     if (
         isinstance(b, (bool, np.bool_))
@@ -223,7 +230,8 @@ def _simulate_gaussian_mixture(
     ``classify_exit`` returns None to continue, False for a correct exit, and
     True for a wrong exit. Use the complete mixture density at stopping and
     scaled moments for the estimate and sample standard error. No estimate is
-    returned if a path exceeds the validated positive step limit.
+    returned if a path exceeds the validated positive step limit. A single
+    observation has undefined standard and relative errors, represented by NaN.
     """
     generator: np.random.Generator = rng if rng is not None else np.random.default_rng()
     start_time: float = time.perf_counter()
@@ -261,8 +269,8 @@ def _simulate_gaussian_mixture(
             log_contributions[sample_index] = log_ratio
 
     estimate: float = 0.0
-    std_error: float = 0.0
-    relative_error: float = float("inf")
+    std_error: float = float("nan") if n_samples == 1 else 0.0
+    relative_error: float = float("nan") if n_samples == 1 else float("inf")
     log_probability: float = float("-inf")
     largest_log: float = float(np.max(log_contributions))
     if np.isfinite(largest_log):
@@ -271,12 +279,13 @@ def _simulate_gaussian_mixture(
             try:
                 scaled: np.ndarray = np.exp(log_contributions - largest_log)
                 scaled_mean: float = float(np.mean(scaled))
-                scaled_error: float = float(np.std(scaled, ddof=1) / np.sqrt(n_samples))
                 log_probability = largest_log + float(np.log(scaled_mean))
                 estimate = float(np.exp(log_probability))
-                relative_error = scaled_error / scaled_mean
-                if scaled_error > 0.0:
-                    std_error = float(np.exp(largest_log + np.log(scaled_error)))
+                if n_samples > 1:
+                    scaled_error: float = float(np.std(scaled, ddof=1) / np.sqrt(n_samples))
+                    relative_error = scaled_error / scaled_mean
+                    if scaled_error > 0.0:
+                        std_error = float(np.exp(largest_log + np.log(scaled_error)))
             except FloatingPointError as error:
                 raise RuntimeError("Simulation summary exceeded floating-point range") from error
 
@@ -914,43 +923,44 @@ class MultidimensionalSiegmund:
 
         Args:
             b: Scaling parameter
-            n_samples: Number of Monte Carlo samples
+            n_samples: Positive number of Monte Carlo samples. At least two are
+                needed to estimate standard and relative errors.
             use_feasible_mixture: If True, uses feasible mixture; if False, uses full mixture
             rng: Random-number generator. Pass a seeded generator for reproducible runs.
             max_steps: Positive per-path step limit. Defaults to int(10*b) + 1000.
 
         Returns:
-            SimulationResult with estimate and diagnostics
+            SimulationResult with the sample standard error (ddof=1) and scaled
+            log/relative diagnostics that survive ordinary-weight underflow.
+            With one sample, std_error and relative_error are NaN.
 
         Raises:
-            ValueError: If the scale, sample count, or step limit is invalid.
+            ValueError: If the scale, sample count, step limit, or scaled
+                boundaries are invalid.
             RuntimeError: If a path has not exited within max_steps. No estimate
                 is returned because counting incomplete paths as zero is biased.
         """
-        if not isinstance(n_samples, (int, np.integer)) or isinstance(n_samples, bool):
-            raise ValueError("n_samples must be a positive integer")
-        if n_samples <= 0:
-            raise ValueError("n_samples must be a positive integer")
-        if not np.isfinite(b) or b <= 0:
-            raise ValueError("b must be finite and positive")
-        if max_steps is not None:
-            if (
-                not isinstance(max_steps, (int, np.integer))
-                or isinstance(max_steps, bool)
-                or max_steps <= 0
-            ):
-                raise ValueError("max_steps must be a positive integer")
+        step_limit: int = _validate_mixture_simulation_arguments(
+            b, n_samples, max_steps, allow_single_sample=True
+        )
+        # Preserve Siegmund's fractional-b default. The shared integer arithmetic
+        # also handles finite scales for which multiplication by ten overflows.
+        if max_steps is None and np.isfinite(10.0 * float(b)):
+            step_limit = int(10.0 * float(b)) + 1000
+        lower_boundary: float = -float(b) * self.ell
+        upper_boundary: float = float(b) * self.u
+        if (
+            not np.isfinite(lower_boundary)
+            or not np.isfinite(upper_boundary)
+            or lower_boundary >= 0.0
+            or upper_boundary <= 0.0
+        ):
+            raise ValueError("Scaled boundary magnitudes must be finite and positive")
 
-        step_limit: int = int(10 * b) + 1000 if max_steps is None else int(max_steps)
-        lower_boundary: float = -b * self.ell
-        upper_boundary: float = b * self.u
-
-        generator = rng if rng is not None else np.random.default_rng()
-        start_time = time.time()
-
-        if use_feasible_mixture:
-            tilts, weights, _indices = self.get_feasible_mixture()
-        else:
+        def mixture_factory() -> Tuple[List[np.ndarray], List[float]]:
+            if use_feasible_mixture:
+                tilts, weights, _indices = self.get_feasible_mixture()
+                return tilts, weights
             # Use full mixture (exponentially many components)
             if self.d > 10:
                 warnings.warn(
@@ -960,65 +970,15 @@ class MultidimensionalSiegmund:
             all_tilts = self.compute_optimal_tilts()
             tilts = [beta for beta, _ in all_tilts.values()]
             weights = [1.0 / len(tilts)] * len(tilts)
-            _indices = list(all_tilts.keys())
+            return tilts, weights
 
-        estimates = []
+        def classify_exit(position: np.ndarray) -> Optional[bool]:
+            if np.all((position > upper_boundary) | (position < lower_boundary)):
+                return bool(np.any(position > 0.0))
+            return None
 
-        for sample_idx in range(n_samples):
-            # Choose tilt from mixture
-            tilt_idx = generator.choice(len(tilts), p=weights)
-            theta = tilts[tilt_idx]
-
-            # Generate tilted random walk
-            tilted_mean = self.cgf.mean + self.cgf.cov @ theta
-
-            # Simulate until stopping time
-            position = np.zeros(self.d)
-
-            for n_steps in range(1, step_limit + 1):
-                # Take step
-                step = generator.multivariate_normal(tilted_mean, self.cgf.cov)
-                position += step
-                # Each coordinate must be outside its own asymmetric interval now.
-                if np.all((position > upper_boundary) | (position < lower_boundary)):
-                    break
-            else:
-                # A break on the final allowed step is still a valid exit.
-                raise RuntimeError(
-                    f"Sample {sample_idx + 1} did not exit within max_steps={step_limit}. "
-                    "Increase max_steps and rerun the simulation."
-                )
-
-            # Check if wrong exit (at least one coordinate positive)
-            wrong_exit = any(position[k] > 0 for k in range(self.d))
-
-            if wrong_exit:
-                log_likelihood_ratio = self._mixture_log_likelihood_ratio(
-                    position=position,
-                    n_steps=n_steps,
-                    tilts=tilts,
-                    weights=weights,
-                )
-                estimates.append(np.exp(log_likelihood_ratio))
-            else:
-                estimates.append(0.0)
-
-        # Compute statistics
-        estimates = np.array(estimates)
-        estimate = np.mean(estimates)
-        std_error = np.std(estimates) / np.sqrt(n_samples)
-        relative_error = std_error / estimate if estimate > 0 else np.inf
-
-        computation_time = time.time() - start_time
-        log_probability = np.log(estimate) if estimate > 0 else -np.inf
-
-        return SimulationResult(
-            estimate=estimate,
-            std_error=std_error,
-            relative_error=relative_error,
-            samples_used=n_samples,
-            computation_time=computation_time,
-            log_probability=log_probability,
+        return _simulate_gaussian_mixture(
+            self.cgf, mixture_factory, classify_exit, n_samples, rng, step_limit
         )
 
 
