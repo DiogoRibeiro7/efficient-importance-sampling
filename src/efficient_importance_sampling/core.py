@@ -372,6 +372,135 @@ class RegionOptimizer:
         theta: np.ndarray = tilt_scale * signs * y
         return theta, float(np.sum(theta[selected]))
 
+    @staticmethod
+    def _sum_intersection_objective(magnitudes: np.ndarray, L: int) -> float:
+        """Evaluate the ordered-tail objective in Lemma 6.1 for nonnegative magnitudes."""
+        descending: np.ndarray = np.sort(magnitudes)[::-1]
+        return min(float(np.sum(descending[L - ell :])) / ell for ell in range(1, L + 1))
+
+    def _solve_sum_intersection_region(
+        self, A_indices: List[int], L: int
+    ) -> Tuple[np.ndarray, float]:
+        """Solve the Gaussian region problem using a linear hypograph of its objective.
+
+        For magnitudes y, a rate t is attainable exactly when there are capacities
+        z with 0 <= z <= y, z <= t, and sum(z) >= L*t. This represents the ordered
+        objective with 2*d+1 variables without enumerating size-L subsets.
+
+        A dual certificate from the region's linear programme independently
+        checks optimality: its nonnegative coordinates must have the sum of their
+        L smallest values at least one, and attain the candidate's rate.
+
+        Raises:
+            ValueError: If L or the region's coordinate subset is invalid.
+            RuntimeError: If the candidate fails feasibility or optimality checks.
+        """
+        signs: np.ndarray = self._region_signs(A_indices)
+        if (
+            isinstance(L, (bool, np.bool_))
+            or not isinstance(L, (int, np.integer))
+            or not 1 <= L < self.d
+        ):
+            raise ValueError("L must be an integer satisfying 1 <= L < d")
+        if len(A_indices) < L:
+            raise ValueError("A sum-intersection region must contain at least L coordinates")
+        if L == 1:
+            return self._solve_siegmund_region(A_indices, u=1.0, ell=1.0)
+        if np.all(signs * self.cgf.mean >= 0.0):
+            return np.zeros(self.d), 0.0
+
+        drift_scale: float = float(np.max(np.abs(self.cgf.mean)))
+        variance_scale: float = float(np.max(np.diag(self.cgf.cov)))
+        tilt_scale: float = drift_scale / variance_scale
+        drift: np.ndarray = signs * self.cgf.mean / drift_scale
+        quadratic: np.ndarray = self.cgf.cov * np.outer(signs, signs) / variance_scale
+        size: int = 2 * self.d + 1
+
+        # Variables are [magnitudes y, capacities z, rate t], all nonnegative.
+        linear: np.ndarray = np.zeros((size, size))
+        linear[: self.d, : self.d] = np.eye(self.d)
+        linear[: self.d, self.d : -1] = -np.eye(self.d)
+        linear[self.d : -1, self.d : -1] = -np.eye(self.d)
+        linear[self.d : -1, -1] = 1.0
+        linear[-1, self.d : -1] = 1.0
+        linear[-1, -1] = -L
+
+        def constraint(values: np.ndarray) -> float:
+            y: np.ndarray = values[: self.d]
+            return -float(drift @ y + 0.5 * y @ quadratic @ y)
+
+        def constraint_gradient(values: np.ndarray) -> np.ndarray:
+            gradient: np.ndarray = np.zeros(size)
+            gradient[: self.d] = -(drift + quadratic @ values[: self.d])
+            return gradient
+
+        # Add positive mass in every coordinate while retaining negative drift.
+        direction: np.ndarray = np.maximum(-drift, 0.0)
+        direction += -float(drift @ direction) / (2.0 * float(np.sum(np.abs(drift))))
+        y_initial: np.ndarray = direction * float(
+            -(drift @ direction) / (direction @ quadratic @ direction)
+        )
+        initial_rate: float = 0.5 * self._sum_intersection_objective(y_initial, L)
+        initial: np.ndarray = np.concatenate(
+            [y_initial, np.minimum(y_initial, initial_rate), [initial_rate]]
+        )
+        objective_gradient: np.ndarray = np.zeros(size)
+        objective_gradient[-1] = -1.0
+        result = opt.minimize(
+            lambda values: -float(values[-1]),
+            initial,
+            jac=lambda values: objective_gradient,
+            method="SLSQP",
+            bounds=[(0.0, None)] * size,
+            constraints=[
+                {"type": "ineq", "fun": constraint, "jac": constraint_gradient},
+                {
+                    "type": "ineq",
+                    "fun": lambda values: linear @ values,
+                    "jac": lambda values: linear,
+                },
+            ],
+            options={"ftol": 1e-10, "maxiter": 500, "disp": False},
+        )
+        diagnostic: str = f": {result.message}" if not result.success else ""
+        values: np.ndarray = np.asarray(result.x, dtype=float)
+        if values.shape != (size,) or not np.all(np.isfinite(values)):
+            raise RuntimeError(
+                f"Sum-intersection optimisation returned an invalid candidate{diagnostic}"
+            )
+        residual: float = constraint(values)
+        if (
+            np.any(values < 0.0)
+            or not np.isfinite(residual)
+            or abs(residual) > 1e-8
+            or np.min(linear @ values) < -1e-8 * max(1.0, float(np.max(values)))
+        ):
+            raise RuntimeError(
+                f"Sum-intersection optimisation returned an infeasible candidate{diagnostic}"
+            )
+
+        y: np.ndarray = values[: self.d]
+        variance: float = float(y @ quadratic @ y)
+        projected_drift: float = float(drift @ y)
+        if variance <= 0.0 or projected_drift >= 0.0:
+            raise RuntimeError(
+                f"Sum-intersection optimisation returned a nonoptimal zero tilt{diagnostic}"
+            )
+        # Correct the small accepted Gaussian boundary residual along this ray.
+        y = y * (-2.0 * projected_drift / variance)
+        rate: float = self._sum_intersection_objective(y, L)
+        gradient: np.ndarray = drift + quadratic @ y
+        normal_product: float = float(gradient @ y)
+        if rate <= 0.0 or not np.isfinite(normal_product) or normal_product <= 0.0:
+            raise RuntimeError(f"Sum-intersection optimisation returned a degenerate tilt{diagnostic}")
+
+        # The certificate gives a global upper bound equal to the computed rate.
+        certificate: np.ndarray = (rate / normal_product) * gradient
+        if np.min(certificate) < -1e-6 or np.sum(np.sort(certificate)[:L]) < 1.0 - 1e-6:
+            raise RuntimeError(f"Sum-intersection optimisation failed the optimality check{diagnostic}")
+
+        return tilt_scale * signs * y, tilt_scale * rate
+
     def solve_kkt_system(
         self,
         A_indices: List[int],
@@ -388,7 +517,7 @@ class RegionOptimizer:
             (beta, rate): Optimal exponential tilt and minimal rate
 
         Raises:
-            RuntimeError: If a Siegmund or gap region cannot be solved and validated.
+            RuntimeError: If a region cannot be solved and validated.
         """
         if "siegmund" in constraints:
             return self._solve_siegmund_region(
@@ -399,124 +528,11 @@ class RegionOptimizer:
         if "gap" in constraints:
             return self._solve_gap_region(A_indices)
 
-        def objective_and_constraints(theta: np.ndarray) -> Tuple[float, float]:
-            """Combined objective and constraint function."""
-            # Constraint: Λ(θ) = 0
-            constraint_val = self.cgf.Lambda(theta)
-
-            # Compute objective based on region type
-            if "siegmund" in constraints:
-                u, ell = constraints["siegmund"]["u"], constraints["siegmund"]["ell"]
-                obj = sum(u * theta[k] for k in A_indices) - sum(
-                    ell * theta[k] for k in range(self.d) if k not in A_indices
-                )
-            elif "gap" in constraints:
-                obj = sum(theta[k] for k in A_indices)
-            elif "sum_intersection" in constraints:
-                L = constraints["sum_intersection"]["L"]
-                # Use decreasing rearrangement
-                abs_theta = np.abs(theta)
-                sorted_theta = np.sort(abs_theta)[::-1]
-                obj = min(
-                    sum(sorted_theta[L - ell : L + ell]) / (2 * ell + 1)
-                    for ell in range(1, L + 1)
-                )
-            else:
-                raise ValueError("Unknown constraint type")
-
-            return obj, constraint_val
-
-        # Use method of Lagrange multipliers with numerical optimization
-        def lagrangian(params: np.ndarray) -> float:
-            theta = params[: self.d]
-            lambda_0 = params[self.d]
-
-            obj, constraint = objective_and_constraints(theta)
-            return -(obj - lambda_0 * constraint)
-
-        def constraint_func(params: np.ndarray) -> float:
-            theta = params[: self.d]
-            return self.cgf.Lambda(theta)
-
-        # Initial guess
-        x0 = np.zeros(self.d + 1)
-        x0[self.d] = 1.0  # lambda_0
-
-        # Set up constraints
-        cons = [{"type": "eq", "fun": constraint_func}]
-
-        # Add sign constraints for coordinates
-        bounds = []
-        for k in range(self.d):
-            if k in A_indices:
-                bounds.append((0, None))  # θ_k ≥ 0
-            else:
-                bounds.append((None, 0))  # θ_k ≤ 0
-        bounds.append((0.01, None))  # λ₀ > 0
-
-        try:
-            result = opt.minimize(
-                lagrangian,
-                x0,
-                method="SLSQP",
-                bounds=bounds,
-                constraints=cons,
-                options={"ftol": 1e-12, "disp": False},
+        if "sum_intersection" in constraints:
+            return self._solve_sum_intersection_region(
+                A_indices, L=constraints["sum_intersection"]["L"]
             )
-
-            if result.success:
-                theta_opt = result.x[: self.d]
-                obj_val, _ = objective_and_constraints(theta_opt)
-                return theta_opt, obj_val
-            else:
-                # Fallback to simpler method
-                return self._fallback_optimization(A_indices, constraints)
-
-        except Exception:
-            return self._fallback_optimization(A_indices, constraints)
-
-    def _fallback_optimization(
-        self, A_indices: List[int], constraints: Dict
-    ) -> Tuple[np.ndarray, float]:
-        """Fallback optimization method."""
-        # Simple gradient-based approach with constraint projection
-        theta = np.zeros(self.d)
-
-        for _ in range(100):
-            # Gradient step
-            grad = self.cgf.grad_Lambda(theta)
-
-            # Project to satisfy Λ(θ) = 0
-            lambda_val = self.cgf.Lambda(theta)
-            if abs(lambda_val) > 1e-8:
-                # Newton step for constraint
-                hess = self.cgf.hessian_Lambda(theta)
-                try:
-                    theta -= (
-                        lambda_val
-                        * np.linalg.solve(hess, grad)
-                        / np.dot(grad, np.linalg.solve(hess, grad))
-                    )
-                except:
-                    theta -= 0.01 * grad
-
-            # Project sign constraints
-            for k in range(self.d):
-                if k in A_indices:
-                    theta[k] = max(0, theta[k])
-                else:
-                    theta[k] = min(0, theta[k])
-
-        # Compute rate
-        if "siegmund" in constraints:
-            u, ell = constraints["siegmund"]["u"], constraints["siegmund"]["ell"]
-            rate = sum(u * theta[k] for k in A_indices) - sum(
-                ell * theta[k] for k in range(self.d) if k not in A_indices
-            )
-        else:
-            rate = sum(theta[k] for k in A_indices)
-
-        return theta, rate
+        raise ValueError("Unknown constraint type")
 
 
 class MultidimensionalSiegmund:
@@ -899,6 +915,9 @@ class SumIntersectionRule:
         """
         Compute feasible mixture for sum-intersection rule.
 
+        This currently combines size-L and at most 100 size-(L+1) region tilts.
+        It does not construct the auxiliary family required by Theorem 6.2.
+
         Returns:
             (tilts, weights): Mixture components and weights
         """
@@ -913,13 +932,13 @@ class SumIntersectionRule:
             beta, rate = self.optimizer.solve_kkt_system(list(subset), constraints)
             tilts.append(beta)
 
-        # Additional tilts for size-(L+1) subsets
+        # Legacy component selection: extra regions, not the auxiliary family (43).
         subsets_L_plus_1 = list(itertools.combinations(range(self.d), self.L + 1))
 
         for subset in subsets_L_plus_1[
             : min(100, len(subsets_L_plus_1))
         ]:  # Limit for efficiency
-            # Solve optimization problem (44)
+            # Solve the region problem from Lemma 6.1 for this larger subset.
             constraints = {"sum_intersection": {"L": self.L}}
             beta, rate = self.optimizer.solve_kkt_system(list(subset), constraints)
             tilts.append(beta)
