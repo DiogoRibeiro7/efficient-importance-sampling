@@ -6,6 +6,7 @@ from .core import (
     MultidimensionalSiegmund,
     RegionOptimizer,
     SimulationResult,
+    SumIntersectionEfficiencyResult,
     SumIntersectionRule,
     run_comprehensive_example,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "MultidimensionalSiegmund",
     "RegionOptimizer",
     "SimulationResult",
+    "SumIntersectionEfficiencyResult",
     "SumIntersectionRule",
     "run_comprehensive_example",
 ]

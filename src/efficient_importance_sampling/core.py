@@ -13,7 +13,7 @@ The paper's asymptotic efficiency conditions require separate verification.
 import numpy as np
 import scipy.optimize as opt
 from scipy.special import logsumexp
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 import itertools
 import warnings
 from dataclasses import dataclass
@@ -30,6 +30,44 @@ class SimulationResult:
     samples_used: int
     computation_time: float
     log_probability: float
+
+
+@dataclass(frozen=True)
+class SumIntersectionEfficiencyResult:
+    """Numerical diagnostic for condition (H-SI), not a proof of efficiency.
+
+    ``critical_region`` attains ``minimum_region_rate`` over size-L subsets.
+    ``weakest_subset`` and ``extra_coordinate`` identify the nested pair attaining
+    ``coverage_bound``. All coordinate indices are zero-based. ``tolerance`` is
+    the absolute comparison band, including the requested relative tolerance.
+    A ``not_satisfied`` result rejects this sufficient condition, not efficiency.
+    """
+
+    minimum_region_rate: float
+    coverage_bound: float
+    critical_region: Tuple[int, ...]
+    weakest_subset: Tuple[int, ...]
+    extra_coordinate: int
+    tolerance: float
+
+    @property
+    def required_bound(self) -> float:
+        """Twice the smallest size-L region rate, the right side of (H-SI)."""
+        return 2.0 * self.minimum_region_rate
+
+    @property
+    def margin(self) -> float:
+        """Coverage bound minus the required bound."""
+        return self.coverage_bound - self.required_bound
+
+    @property
+    def status(self) -> Literal["satisfied", "not_satisfied", "borderline"]:
+        """Compare the margin with a symmetric numerical tolerance band."""
+        if self.margin > self.tolerance:
+            return "satisfied"
+        if self.margin < -self.tolerance:
+            return "not_satisfied"
+        return "borderline"
 
 
 class CumulantFunction:
@@ -430,6 +468,41 @@ class RegionOptimizer:
             RuntimeError: If the numerical candidate cannot be validated.
         """
         self._region_signs(A_indices)
+        return self._solve_sum_intersection_supported(A_indices, len(A_indices))
+
+    def solve_sum_intersection_coverage(
+        self, B_indices: List[int], L: int
+    ) -> Tuple[np.ndarray, float]:
+        """Return the supported tilt and value s_B in equation (44).
+
+        Maximise the order-L objective on exactly L+1 selected coordinates,
+        with a nonnegative tilt on B and exact zeros outside B. This auxiliary
+        optimisation supplies the coverage bound used in condition (H-SI).
+        Its tilt is not an additional component of the basic mixture.
+
+        Args:
+            B_indices: Subset of L+1 distinct valid coordinate indices.
+            L: Integer stopping-rule order satisfying 1 <= L < d.
+
+        Raises:
+            ValueError: If the order or subset is invalid.
+            RuntimeError: If the numerical candidate cannot be validated.
+        """
+        self._region_signs(B_indices)
+        if (
+            isinstance(L, (bool, np.bool_))
+            or not isinstance(L, (int, np.integer))
+            or not 1 <= L < self.d
+        ):
+            raise ValueError("L must be an integer satisfying 1 <= L < d")
+        if len(B_indices) != L + 1:
+            raise ValueError("A coverage subset must contain exactly L+1 coordinates")
+        return self._solve_sum_intersection_supported(B_indices, L)
+
+    def _solve_sum_intersection_supported(
+        self, A_indices: List[int], L: int
+    ) -> Tuple[np.ndarray, float]:
+        """Solve a validated supported problem on its principal Gaussian submodel."""
         indices: np.ndarray = np.asarray(A_indices, dtype=int)
         restricted: CumulantFunction = CumulantFunction(
             self.cgf.mean[indices], self.cgf.cov[np.ix_(indices, indices)]
@@ -440,7 +513,7 @@ class RegionOptimizer:
             value: float = float(supported_tilt[0])
         else:
             supported_tilt, value = RegionOptimizer(restricted)._solve_sum_intersection_program(
-                np.ones(indices.size), int(indices.size)
+                np.ones(indices.size), L
             )
         theta: np.ndarray = np.zeros(self.d)
         theta[indices] = supported_tilt
@@ -983,6 +1056,93 @@ class SumIntersectionRule:
         weights: List[float] = [1.0 / len(tilts)] * len(tilts)
 
         return tilts, weights
+
+    def check_efficiency_condition(
+        self, *, rtol: float = 1e-6, atol: float = 1e-10
+    ) -> SumIntersectionEfficiencyResult:
+        """Numerically evaluate the sufficient condition (H-SI) in Theorem 6.2.
+
+        Compare min_{|A|=L, k not in A}(z_A + s_{A union {k}}) with
+        2*min_{|A|=L}(r_A), retaining a pair and region attaining the minima.
+        Each size-L region and auxiliary problem is solved once; each size-L+1
+        coverage problem is solved once. No subsets are truncated.
+
+        Args:
+            rtol: Finite nonnegative relative comparison tolerance.
+            atol: Finite nonnegative absolute comparison tolerance.
+
+        Returns:
+            Rates, margin, witnesses, and a three-way numerical status. Margins
+            within atol + rtol*max(abs(left), abs(right)) are borderline, including
+            exact equality. The comparison band is not a rigorous error bound.
+            A satisfied result supports (H-SI) numerically; a failure does not
+            establish inefficiency. Other theorem assumptions are not checked.
+
+        Raises:
+            ValueError: If tolerances are invalid or any drift is nonnegative.
+            RuntimeError: If an optimisation fails validation.
+        """
+        for name, tolerance in (("rtol", rtol), ("atol", atol)):
+            if (
+                isinstance(tolerance, (bool, np.bool_))
+                or not isinstance(tolerance, (int, float, np.integer, np.floating))
+                or not np.isfinite(tolerance)
+                or tolerance < 0.0
+            ):
+                raise ValueError(f"{name} must be a finite nonnegative number")
+        if np.any(self.cgf.mean >= 0.0):
+            raise ValueError("The efficiency condition requires strictly negative coordinate drifts")
+
+        minimum_rate: float = float("inf")
+        critical_region: Tuple[int, ...] = ()
+        auxiliary_values: Dict[Tuple[int, ...], float] = {}
+        constraints: Dict[str, Union[bool, Dict[str, Union[int, float, bool]]]] = {
+            "sum_intersection": {"L": self.L}
+        }
+        for subset in itertools.combinations(range(self.d), self.L):
+            _, rate = self.optimizer.solve_kkt_system(list(subset), constraints)
+            _, auxiliary_value = self.optimizer.solve_sum_intersection_auxiliary(list(subset))
+            if not np.all(np.isfinite([rate, auxiliary_value])) or min(rate, auxiliary_value) <= 0.0:
+                raise RuntimeError("The efficiency diagnostic requires finite positive optimal values")
+            auxiliary_values[subset] = auxiliary_value
+            if rate < minimum_rate:
+                minimum_rate = rate
+                critical_region = subset
+
+        coverage_bound: float = float("inf")
+        weakest_subset: Tuple[int, ...] = ()
+        extra_coordinate: int = -1
+        for larger_subset in itertools.combinations(range(self.d), self.L + 1):
+            _, coverage_value = self.optimizer.solve_sum_intersection_coverage(
+                list(larger_subset), self.L
+            )
+            if not np.isfinite(coverage_value) or coverage_value <= 0.0:
+                raise RuntimeError("The efficiency diagnostic requires finite positive optimal values")
+            # Only nested pairs enter (H-SI); independent minima would be incorrect.
+            for position, coordinate in enumerate(larger_subset):
+                subset = larger_subset[:position] + larger_subset[position + 1 :]
+                bound: float = auxiliary_values[subset] + coverage_value
+                if not np.isfinite(bound):
+                    raise RuntimeError("The efficiency coverage bound overflowed")
+                if bound < coverage_bound:
+                    coverage_bound = bound
+                    weakest_subset = subset
+                    extra_coordinate = coordinate
+
+        required_bound: float = 2.0 * minimum_rate
+        if not np.isfinite(required_bound):
+            raise RuntimeError("The efficiency required bound overflowed")
+        comparison_tolerance: float = float(atol) + float(rtol) * max(coverage_bound, required_bound)
+        if not np.isfinite(comparison_tolerance):
+            raise ValueError("The efficiency comparison tolerance overflowed")
+        return SumIntersectionEfficiencyResult(
+            minimum_region_rate=minimum_rate,
+            coverage_bound=coverage_bound,
+            critical_region=critical_region,
+            weakest_subset=weakest_subset,
+            extra_coordinate=extra_coordinate,
+            tolerance=comparison_tolerance,
+        )
 
 
 def run_comprehensive_example(
