@@ -457,6 +457,27 @@ bound. A satisfied result is numerical evidence for (H-SI), not a proof of
 asymptotic efficiency. A failed sufficient condition does not establish
 inefficiency, and other theorem assumptions are not checked by this method.
 
+### Gaussian support values and direction scaling
+
+For a Gaussian mean $\mu$ and positive-definite covariance $\Sigma$, the support
+function from equation (9) of
+[Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1) is
+
+$$
+I(x) = -\mu^\top\Sigma^{-1}x
+       + \sqrt{(\mu^\top\Sigma^{-1}\mu)(x^\top\Sigma^{-1}x)}.
+$$
+
+`CumulantFunction.rate_function_I(x)` evaluates this support function, and
+`optimal_theta(x)` returns a maximising tilt subject to $\Lambda(\theta)\leq0$.
+For $c>0$, $I(cx)=cI(x)$ while the maximising tilt is unchanged. Both methods
+normalise a nonzero input by its largest absolute coordinate before evaluating
+quadratic forms. The support calculation restores the magnitude at the end.
+This avoids losing valid results by squaring very small or large coordinates.
+Zero directions and zero drift return zero support and the zero tilt.
+Normalisation addresses direction magnitude; ill-conditioned covariance
+matrices and results outside floating-point range remain numerical limitations.
+
 ### Gaussian auxiliary tilts
 
 For a direction $v$ and a nonnegative scale $t$, the Gaussian cumulant generating
@@ -469,7 +490,10 @@ $$
 If $\mu^\top v < 0$, the largest feasible scale is
 $t_* = -2\mu^\top v/(v^\top\Sigma v)$. Otherwise the feasible tilt is zero.
 `CumulantFunction.optimal_ray_tilt(direction)` computes this endpoint directly and
-returns zero for a zero direction.
+returns zero for a zero direction. It also normalises the direction before
+computing the projected drift and variance, so positive rescaling leaves the
+returned endpoint $t_*v$ unchanged. This endpoint is restricted to the supplied
+ray and can differ from the unrestricted support maximiser `optimal_theta(v)`.
 
 The Siegmund auxiliary components use $v=e_k$. The gap-rule auxiliary components use
 $v=e_{\ell'}-e_\ell$, whose projected variance includes the covariance term
