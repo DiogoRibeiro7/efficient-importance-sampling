@@ -127,9 +127,28 @@ class CumulantFunction:
             raise ValueError("x must contain only finite values")
         return point
 
+    def _normalise_direction(self, x: np.ndarray) -> Tuple[np.ndarray, float]:
+        """Separate a finite direction from its maximum absolute coordinate.
+
+        Normalise before any quadratic form: squaring the original coordinates
+        can underflow or overflow even when the requested result is representable.
+        The zero vector keeps scale zero and is handled explicitly by callers.
+        """
+        point: np.ndarray = self._validate_point(x)
+        magnitude: float = float(np.max(np.abs(point)))
+        if magnitude == 0.0:
+            return point, magnitude
+        return point / magnitude, magnitude
+
     def rate_function_I(self, x: np.ndarray) -> float:
-        """Compute the support function I(x) = sup{θ·x : Λ(θ) ≤ 0}."""
-        point = self._validate_point(x)
+        """Compute I(x) = sup{θ·x : Λ(θ) ≤ 0}, using positive homogeneity.
+
+        Evaluate on a normalised direction and restore its scale only at the
+        end, so extreme coordinate magnitudes do not corrupt quadratic forms.
+        """
+        point, magnitude = self._normalise_direction(x)
+        if magnitude == 0.0:
+            return 0.0
         precision_mean = self.cov_inv @ self.mean
         precision_point = self.cov_inv @ point
         mean_norm_squared = float(self.mean @ precision_mean)
@@ -139,13 +158,21 @@ class CumulantFunction:
             return 0.0
 
         return float(
-            -self.mean @ precision_point
-            + np.sqrt(mean_norm_squared * point_norm_squared)
+            magnitude * (
+                -self.mean @ precision_point
+                + np.sqrt(mean_norm_squared * point_norm_squared)
+            )
         )
 
     def optimal_theta(self, x: np.ndarray) -> np.ndarray:
-        """Return a maximiser of θ·x subject to Λ(θ) ≤ 0."""
-        point = self._validate_point(x)
+        """Return a maximiser of θ·x subject to Λ(θ) ≤ 0.
+
+        Positive rescaling of x leaves the maximiser unchanged. Normalise x
+        before evaluating its quadratic form to preserve this property.
+        """
+        point, magnitude = self._normalise_direction(x)
+        if magnitude == 0.0:
+            return np.zeros(self.d)
         precision_mean = self.cov_inv @ self.mean
         precision_point = self.cov_inv @ point
         mean_norm_squared = float(self.mean @ precision_mean)
@@ -154,7 +181,7 @@ class CumulantFunction:
         if mean_norm_squared <= 0.0 or point_norm_squared <= 0.0:
             return np.zeros(self.d)
 
-        scale = np.sqrt(mean_norm_squared / point_norm_squared)
+        scale = np.sqrt(mean_norm_squared) / np.sqrt(point_norm_squared)
         return -precision_mean + scale * precision_point
 
     def optimal_ray_tilt(self, direction: np.ndarray) -> np.ndarray:
@@ -163,7 +190,9 @@ class CumulantFunction:
         For a Gaussian CGF, Lambda(t*v) = t*(mean @ v) + t**2*(v @ cov @ v)/2.
         If the projected drift is negative, the nonzero root is
         t = -2*(mean @ v)/(v @ cov @ v). Otherwise only the origin is feasible.
-        A zero direction also returns the zero vector.
+        A zero direction also returns the zero vector. Positive rescaling of
+        the direction leaves the endpoint unchanged; normalise before taking
+        the projected drift and variance to avoid squaring extreme magnitudes.
 
         Args:
             direction: Finite vector with the same dimension as the Gaussian mean.
@@ -174,7 +203,9 @@ class CumulantFunction:
         Raises:
             ValueError: If the direction has the wrong shape or non-finite entries.
         """
-        vector: np.ndarray = self._validate_point(direction)
+        vector, magnitude = self._normalise_direction(direction)
+        if magnitude == 0.0:
+            return np.zeros(self.d)
         projected_drift: float = float(self.mean @ vector)
         if projected_drift >= 0.0:
             return np.zeros(self.d)
