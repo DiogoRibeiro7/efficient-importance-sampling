@@ -1002,8 +1002,8 @@ class SumIntersectionRule:
     """
     Implementation of the sum-intersection rule (Section 6).
 
-    This handles the case where we stop when the sum of the L smallest coordinates
-    exceeds a threshold and want to estimate wrong decision probability.
+    Stop when the sum of the L smallest absolute coordinates exceeds a threshold.
+    A wrong decision has at least L strictly positive coordinates at that time.
     """
 
     def __init__(self, d: int, L: int, mean: np.ndarray, covariance: np.ndarray) -> None:
@@ -1012,19 +1012,23 @@ class SumIntersectionRule:
 
         Args:
             d: Dimension
-            L: Number of smallest coordinates to sum
+            L: Number of smallest absolute coordinates to sum
             mean: Mean vector (all negative)
             covariance: Covariance matrix
         """
-        if d < 2:
-            raise ValueError("d must be at least 2")
-        if not 1 <= L < d:
-            raise ValueError("L must satisfy 1 <= L < d")
+        if isinstance(d, (bool, np.bool_)) or not isinstance(d, (int, np.integer)) or d < 2:
+            raise ValueError("d must be at least 2 and an integer")
+        if (
+            isinstance(L, (bool, np.bool_))
+            or not isinstance(L, (int, np.integer))
+            or not 1 <= L < d
+        ):
+            raise ValueError("L must satisfy 1 <= L < d and be an integer")
         if len(mean) != d:
             raise ValueError("Mean vector dimension must equal d")
 
-        self.d = d
-        self.L = L
+        self.d = int(d)
+        self.L = int(L)
         self.cgf = CumulantFunction(mean, covariance)
         self.optimizer = RegionOptimizer(self.cgf)
 
@@ -1144,6 +1148,132 @@ class SumIntersectionRule:
             tolerance=comparison_tolerance,
         )
 
+    def simulate_wrong_exit_probability(
+        self,
+        b: float,
+        n_samples: int = 10000,
+        rng: Optional[np.random.Generator] = None,
+        *,
+        max_steps: Optional[int] = None,
+    ) -> SimulationResult:
+        """Estimate the sum-intersection wrong-exit probability using the mixture.
+
+        Draw one component per path and keep it fixed. Stop at the first time
+        the sum of the L smallest absolute coordinates is strictly greater than
+        b. A contribution is nonzero exactly when at least L coordinates are
+        strictly positive at stopping. Weight each path against every mixture
+        component, including its actual Gaussian CGF term.
+
+        Args:
+            b: Finite positive stopping threshold.
+            n_samples: Integer at least two, needed for the sample variance.
+            rng: Optional generator for reproducible simulations.
+            max_steps: Positive per-path limit; defaults to 10*int(b) + 1000.
+
+        Returns:
+            Estimate, sample standard error (ddof=1), relative standard error,
+            sample count, elapsed seconds, and the log probability estimate.
+            Log-space accumulation preserves the latter and relative error even
+            when the ordinary estimate underflows. With no observed wrong exits,
+            estimate and empirical standard error are zero, relative error is
+            infinite, and log_probability is negative infinity. This does not
+            establish that the true probability is zero.
+
+        Raises:
+            ValueError: If arguments are invalid or any coordinate drift is
+                nonnegative, outside the intended rare-event setting.
+            RuntimeError: If proposal construction fails, a path is unfinished
+                at max_steps, or numerical overflow invalidates the result.
+
+        The method does not run the separate efficiency-condition diagnostic.
+        """
+        if (
+            isinstance(n_samples, (bool, np.bool_))
+            or not isinstance(n_samples, (int, np.integer))
+            or n_samples < 2
+        ):
+            raise ValueError("n_samples must be an integer of at least two")
+        if (
+            isinstance(b, (bool, np.bool_))
+            or not isinstance(b, (int, float, np.integer, np.floating))
+            or not np.isfinite(b)
+            or b <= 0.0
+        ):
+            raise ValueError("b must be finite and positive")
+        if max_steps is not None and (
+            isinstance(max_steps, (bool, np.bool_))
+            or not isinstance(max_steps, (int, np.integer))
+            or max_steps <= 0
+        ):
+            raise ValueError("max_steps must be a positive integer")
+        if np.any(self.cgf.mean >= 0.0):
+            raise ValueError("Sum-intersection simulation requires strictly negative coordinate drifts")
+
+        step_limit: int = 10 * int(b) + 1000 if max_steps is None else int(max_steps)
+        generator: np.random.Generator = rng if rng is not None else np.random.default_rng()
+        start_time: float = time.perf_counter()
+        tilts, weights = self.compute_feasible_mixture()
+        tilt_matrix: np.ndarray = np.asarray(tilts)
+        tilted_means: np.ndarray = self.cgf.mean + tilt_matrix @ self.cgf.cov.T
+        cumulants: np.ndarray = np.asarray([self.cgf.Lambda(theta) for theta in tilts])
+        log_weights: np.ndarray = np.log(weights)
+        log_contributions: np.ndarray = np.full(n_samples, -np.inf)
+
+        for sample_index in range(n_samples):
+            component: int = int(generator.choice(len(tilts), p=weights))
+            position: np.ndarray = np.zeros(self.d)
+            for n_steps in range(1, step_limit + 1):
+                position += generator.multivariate_normal(tilted_means[component], self.cgf.cov)
+                if not np.all(np.isfinite(position)):
+                    raise RuntimeError("A simulated position became nonfinite")
+                # Partition by absolute value; signed sorting gives a different rule.
+                smallest: np.ndarray = np.partition(np.abs(position), self.L - 1)[: self.L]
+                if float(np.sum(smallest)) > b:
+                    break
+            else:
+                raise RuntimeError(
+                    f"Sample {sample_index + 1} did not exit within max_steps={step_limit}. "
+                    "Increase max_steps and rerun the simulation."
+                )
+
+            if np.count_nonzero(position > 0.0) >= self.L:
+                # This is the density of the entire path mixture, not only its draw.
+                log_ratio: float = -float(
+                    logsumexp(log_weights + tilt_matrix @ position - n_steps * cumulants)
+                )
+                if not np.isfinite(log_ratio):
+                    raise RuntimeError("A simulated path likelihood became nonfinite")
+                log_contributions[sample_index] = log_ratio
+
+        estimate: float = 0.0
+        std_error: float = 0.0
+        relative_error: float = float("inf")
+        log_probability: float = float("-inf")
+        largest_log: float = float(np.max(log_contributions))
+        if np.isfinite(largest_log):
+            # Scale before taking moments, retaining zero contributions in the sample.
+            with np.errstate(under="ignore", over="raise", invalid="raise"):
+                try:
+                    scaled: np.ndarray = np.exp(log_contributions - largest_log)
+                    scaled_mean: float = float(np.mean(scaled))
+                    scaled_error: float = float(np.std(scaled, ddof=1) / np.sqrt(n_samples))
+                    log_probability = largest_log + float(np.log(scaled_mean))
+                    estimate = float(np.exp(log_probability))
+                    relative_error = scaled_error / scaled_mean
+                    if scaled_error > 0.0:
+                        std_error = float(np.exp(largest_log + np.log(scaled_error)))
+                except FloatingPointError as error:
+                    raise RuntimeError("Simulation summary exceeded floating-point range") from error
+
+        return SimulationResult(
+            estimate=estimate,
+            std_error=std_error,
+            relative_error=relative_error,
+            samples_used=int(n_samples),
+            computation_time=time.perf_counter() - start_time,
+            log_probability=log_probability,
+        )
+
 
 def run_comprehensive_example(
     rng: Optional[np.random.Generator] = None,
@@ -1233,6 +1363,8 @@ def run_comprehensive_example(
     tilts_si, weights_si = sum_int.compute_feasible_mixture()
     print(f"Feasible mixture components: {len(tilts_si)}")
     print("Includes every size-L region tilt and every size-L auxiliary tilt")
+    result_si = sum_int.simulate_wrong_exit_probability(2.0, n_samples=1000, rng=generator)
+    print(f"Wrong exit estimate: {result_si.estimate:.2e} ± {result_si.std_error:.2e} (SE)")
 
     print("\n=== Summary ===")
     print("✓ Region and auxiliary proposal families constructed for all three problems")
