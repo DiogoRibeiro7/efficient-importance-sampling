@@ -4,8 +4,8 @@
 
 ## Project Overview
 
-- **Python Files:** 11
-- **Test Files:** 8
+- **Python Files:** 12
+- **Test Files:** 9
 - **Frameworks:** None detected
 
 ## Architecture Diagrams
