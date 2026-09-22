@@ -51,9 +51,9 @@ The implementation includes:
 - ✅ Region and auxiliary proposal families
 - ✅ Numerical feasibility and optimality checks for Gaussian tilts
 
-The paper supplies the asymptotic efficiency results and their assumptions. In
-particular, the sum-intersection mixture builder does not check condition (H-SI)
-from Theorem 6.2.
+The paper supplies the asymptotic efficiency results and their assumptions.
+For the sum-intersection rule, call `check_efficiency_condition()` explicitly
+to evaluate condition (H-SI) from Theorem 6.2 numerically.
 
 ## Installation
 
@@ -151,6 +151,10 @@ sum_int = SumIntersectionRule(
 
 tilts, weights = sum_int.compute_feasible_mixture()
 print(f"Mixture components: {len(tilts)}")  # 20 = 2 * binom(5, 2)
+
+diagnostic = sum_int.check_efficiency_condition()
+print(diagnostic.status)  # "satisfied" for this independent Gaussian model
+print(f"H-SI margin: {diagnostic.margin:.6f}")  # 0.500000
 ```
 
 ## Running the Demo
@@ -298,8 +302,47 @@ agrees with the unit-boundary Siegmund mixture.
 
 This is the proposal family in
 [Theorem 6.2 of Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1).
-The builder does **not** evaluate the theorem's sufficient condition (H-SI), so
-asymptotic efficiency still requires a separate check for the chosen model.
+The builder does **not** evaluate the theorem's sufficient condition (H-SI)
+automatically. The diagnostic below evaluates it in a separate call.
+
+### Numerical sum-intersection efficiency diagnostic
+
+`SumIntersectionRule.check_efficiency_condition(rtol=1e-6, atol=1e-10)` returns a
+`SumIntersectionEfficiencyResult` for models with strictly negative coordinate
+drifts. It computes the margin
+
+$$
+\Delta=\min_{|A|=L,\;k\notin A}\left(z_A+s_{A\cup\{k\}}\right)
+       -2\min_{|A|=L}r_A.
+$$
+
+The values $s_B$ come from the supported order-$L$ optimisation in equation (44)
+on each size-$(L+1)$ subset. Each such problem is solved once, and the comparison
+uses nested pairs $A\subset B$ rather than minimising $z_A$ and $s_B$ independently.
+The diagnostic does not add these coverage tilts to the mixture. It performs
+$2\binom{d}{L}+\binom{d}{L+1}$ solves and retains $\binom{d}{L}$ auxiliary values,
+so its cost still grows combinatorially when $L$ grows with $d$.
+
+The result includes `minimum_region_rate`, `required_bound`, `coverage_bound`,
+`margin`, and `tolerance`. The comparison tolerance is
+`atol + rtol * max(abs(coverage_bound), abs(required_bound))`.
+
+| Status | Numerical comparison |
+| --- | --- |
+| `satisfied` | `margin > tolerance` |
+| `not_satisfied` | `margin < -tolerance` |
+| `borderline` | `abs(margin) <= tolerance`, including equality |
+
+`critical_region` identifies a size-$L$ subset attaining the smallest region
+rate. `weakest_subset` and `extra_coordinate` identify a nested pair attaining
+the coverage bound. Indices are zero-based; tied minima return one attaining pair.
+Invalid tolerances or nonnegative drifts raise `ValueError`. Failed numerical
+optimisations raise `RuntimeError` without returning a partial diagnostic.
+
+The comparison tolerance is a numerical decision band, not a rigorous error
+bound. A satisfied result is numerical evidence for (H-SI), not a proof of
+asymptotic efficiency. A failed sufficient condition does not establish
+inefficiency, and other theorem assumptions are not checked by this method.
 
 ### Gaussian auxiliary tilts
 
@@ -352,6 +395,10 @@ tilt and its minimum selected coordinate. Indices must be a nonempty subset of
 distinct valid coordinates. Invalid input raises `ValueError`; an unvalidated
 numerical candidate raises `RuntimeError`.
 
+`solve_sum_intersection_coverage(B_indices, L)` returns the supported tilt and
+value from equation (44). The subset must contain exactly `L+1` distinct valid
+coordinates and `L` must be an integer satisfying `1 <= L < d`.
+
 #### `MultidimensionalSiegmund`
 
 Implements the multidimensional Siegmund problem with boundary crossings.
@@ -364,7 +411,16 @@ Handles sequential multiple testing with gap-based stopping rules.
 
 Implements sum-intersection stopping rules with order statistics.
 
+`check_efficiency_condition(*, rtol=1e-6, atol=1e-10)` returns a numerical (H-SI)
+diagnostic independently of `compute_feasible_mixture()`.
+
 ### Data Structures
+
+#### `SumIntersectionEfficiencyResult`
+
+Immutable numerical diagnostic with the region rate, coverage bound, comparison
+margin, tolerance, attaining subsets, and a three-way `status`. It is exported
+from `efficient_importance_sampling` alongside `SumIntersectionRule`.
 
 #### `SimulationResult`
 
