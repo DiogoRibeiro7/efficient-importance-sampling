@@ -168,6 +168,8 @@ def test_order_one_estimate_agrees_with_siegmund() -> None:
     expected = siegmund.simulate_wrong_exit_probability(1.0, 100, rng=np.random.default_rng(211))
 
     assert actual.estimate == pytest.approx(expected.estimate, rel=1e-12)
+    assert actual.std_error == pytest.approx(expected.std_error, rel=1e-12)
+    assert actual.relative_error == pytest.approx(expected.relative_error, rel=1e-12)
     assert actual.log_probability == pytest.approx(expected.log_probability, rel=1e-12)
 
 

@@ -101,17 +101,31 @@ siegmund = MultidimensionalSiegmund(
 result = siegmund.simulate_wrong_exit_probability(
     b=3.0,              # scaling parameter
     n_samples=5000,
-    use_feasible_mixture=True
+    use_feasible_mixture=True,
+    rng=np.random.default_rng(42),
 )
 
-print(f"Probability: {result.estimate:.2e} ± {result.std_error:.2e}")
+print(f"Probability: {result.estimate:.2e} (SE {result.std_error:.2e})")
 print(f"Relative error: {result.relative_error:.3f}")
+print(f"Log probability estimate: {result.log_probability:.6f}")
 ```
 
 The stopping rule requires every coordinate to be strictly above `b * u` or strictly
 below `-b * ell` at the same time. A coordinate exactly on a boundary is still inside.
 The upper and lower boundaries may differ, as in equation (1) of
 [Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1).
+
+Both the feasible and full mixtures use the complete path-mixture density at
+stopping. With at least two samples, the standard error is the sample standard
+deviation (`ddof=1`) divided by the square root of the sample count. Scaled
+accumulation preserves `log_probability` and `relative_error` even when the
+ordinary estimate or standard error underflows. Single-sample runs remain
+supported, but `std_error` and `relative_error` are `NaN` because uncertainty
+cannot be estimated from one observation. With multiple samples and no wrong
+exits, the empirical estimate and standard error are zero, the log estimate is
+`-inf`, and the relative error is `inf`; this does not establish a zero
+probability or zero uncertainty. Scaled boundary magnitudes must remain finite
+and strictly positive.
 
 Each path has a step limit, which defaults to `int(10 * b) + 1000`. Set the keyword
 argument `max_steps` to a positive integer to change it. Exits on the final permitted
