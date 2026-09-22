@@ -48,7 +48,7 @@
 <text text-anchor="start" x="333.5" y="-75.8" font-family="Times,serif" font-size="14.00">constraint_gradient</text>
 <text text-anchor="start" x="333.5" y="-60.8" font-family="Times,serif" font-size="14.00">constraint</text>
 <text text-anchor="start" x="333.5" y="-45.8" font-family="Times,serif" font-size="14.00">constraint_gradient</text>
-<text text-anchor="start" x="333.5" y="-30.8" font-family="Times,serif" font-size="14.00">solve_kkt_system</text>
+<text text-anchor="start" x="333.5" y="-30.8" font-family="Times,serif" font-size="14.00">constraint</text>
 </g>
 <!-- MultidimensionalSiegmund -->
 <g id="node4" class="node">
