@@ -103,6 +103,18 @@ print(f"Probability: {result.estimate:.2e} ± {result.std_error:.2e}")
 print(f"Relative error: {result.relative_error:.3f}")
 ```
 
+The stopping rule requires every coordinate to be strictly above `b * u` or strictly
+below `-b * ell` at the same time. A coordinate exactly on a boundary is still inside.
+The upper and lower boundaries may differ, as in equation (1) of
+[Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1).
+
+Each path has a step limit, which defaults to `int(10 * b) + 1000`. Set the keyword
+argument `max_steps` to a positive integer to change it. Exits on the final permitted
+step count normally. If any path remains inside when the limit is reached, the method
+raises `RuntimeError` and returns no estimate. Increase the limit and rerun the whole
+simulation with a fresh generator using the same seed. Unfinished paths are never
+treated as zero contributions, which would bias the probability estimate.
+
 ### Example 2: Gap Rule
 
 ```python
