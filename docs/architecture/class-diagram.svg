@@ -63,18 +63,20 @@
 <!-- MultidimensionalSiegmund -->
 <g id="node5" class="node">
 <title>MultidimensionalSiegmund</title>
-<polygon fill="lightblue" stroke="black" points="864,-15.5 864,-174.5 1112,-174.5 1112,-15.5 864,-15.5"/>
-<text text-anchor="middle" x="988" y="-159.3" font-family="Times,serif" font-size="14.00">MultidimensionalSiegmund</text>
-<polyline fill="none" stroke="black" points="864,-151.5 1112,-151.5 "/>
-<text text-anchor="start" x="872" y="-136.3" font-family="Times,serif" font-size="14.00">d</text>
-<text text-anchor="start" x="872" y="-121.3" font-family="Times,serif" font-size="14.00">ell</text>
-<text text-anchor="start" x="872" y="-106.3" font-family="Times,serif" font-size="14.00">u</text>
-<text text-anchor="start" x="872" y="-91.3" font-family="Times,serif" font-size="14.00">cgf</text>
-<text text-anchor="start" x="872" y="-76.3" font-family="Times,serif" font-size="14.00">optimizer</text>
-<polyline fill="none" stroke="black" points="864,-68.5 1112,-68.5 "/>
-<text text-anchor="start" x="872" y="-53.3" font-family="Times,serif" font-size="14.00">compute_optimal_tilts</text>
-<text text-anchor="start" x="872" y="-38.3" font-family="Times,serif" font-size="14.00">get_feasible_mixture</text>
-<text text-anchor="start" x="872" y="-23.3" font-family="Times,serif" font-size="14.00">simulate_wrong_exit_probability</text>
+<polygon fill="lightblue" stroke="black" points="864,-0.5 864,-189.5 1112,-189.5 1112,-0.5 864,-0.5"/>
+<text text-anchor="middle" x="988" y="-174.3" font-family="Times,serif" font-size="14.00">MultidimensionalSiegmund</text>
+<polyline fill="none" stroke="black" points="864,-166.5 1112,-166.5 "/>
+<text text-anchor="start" x="872" y="-151.3" font-family="Times,serif" font-size="14.00">d</text>
+<text text-anchor="start" x="872" y="-136.3" font-family="Times,serif" font-size="14.00">ell</text>
+<text text-anchor="start" x="872" y="-121.3" font-family="Times,serif" font-size="14.00">u</text>
+<text text-anchor="start" x="872" y="-106.3" font-family="Times,serif" font-size="14.00">cgf</text>
+<text text-anchor="start" x="872" y="-91.3" font-family="Times,serif" font-size="14.00">optimizer</text>
+<polyline fill="none" stroke="black" points="864,-83.5 1112,-83.5 "/>
+<text text-anchor="start" x="872" y="-68.3" font-family="Times,serif" font-size="14.00">compute_optimal_tilts</text>
+<text text-anchor="start" x="872" y="-53.3" font-family="Times,serif" font-size="14.00">get_feasible_mixture</text>
+<text text-anchor="start" x="872" y="-38.3" font-family="Times,serif" font-size="14.00">simulate_wrong_exit_probability</text>
+<text text-anchor="start" x="872" y="-23.3" font-family="Times,serif" font-size="14.00">mixture_factory</text>
+<text text-anchor="start" x="872" y="-8.3" font-family="Times,serif" font-size="14.00">classify_exit</text>
 </g>
 <!-- GapRule -->
 <g id="node6" class="node">
