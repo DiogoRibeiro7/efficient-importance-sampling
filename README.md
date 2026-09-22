@@ -190,6 +190,29 @@ For a rare event `E_b = ∪_{A⊆[d]} W^A_b` (union of exponentially many region
 
 4. **Theoretical guarantee**: Achieves asymptotic efficiency despite reduced complexity
 
+### Gaussian auxiliary tilts
+
+For a direction $v$ and a nonnegative scale $t$, the Gaussian cumulant generating
+function is
+
+$$
+\Lambda(tv) = t\,\mu^\top v + \tfrac12 t^2 v^\top\Sigma v.
+$$
+
+If $\mu^\top v < 0$, the largest feasible scale is
+$t_* = -2\mu^\top v/(v^\top\Sigma v)$. Otherwise the feasible tilt is zero.
+`CumulantFunction.optimal_ray_tilt(direction)` computes this endpoint directly and
+returns zero for a zero direction.
+
+The Siegmund auxiliary components use $v=e_k$. The gap-rule auxiliary components use
+$v=e_{\ell'}-e_\ell$, whose projected variance includes the covariance term
+$\Sigma_{\ell\ell}+\Sigma_{\ell'\ell'}-2\Sigma_{\ell\ell'}$. These implement the
+Gaussian versions of equations (27) and (36) in
+[Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1), without a bounded
+scalar search. The remaining region-specific components still use numerical
+optimisation. Exact auxiliary tilts alone do not establish asymptotic efficiency
+of the complete mixture.
+
 ## Performance
 
 Dimension | Components (Feasible) | Components (Full) | Speedup
