@@ -13,7 +13,7 @@ The paper's asymptotic efficiency conditions require separate verification.
 import numpy as np
 import scipy.optimize as opt
 from scipy.special import logsumexp
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 import itertools
 import warnings
 from dataclasses import dataclass
@@ -182,6 +182,112 @@ class CumulantFunction:
         projected_variance: float = float(vector @ self.cov @ vector)
         scale: float = -2.0 * projected_drift / projected_variance
         return scale * vector
+
+
+def _validate_mixture_simulation_arguments(
+    b: float, n_samples: int, max_steps: Optional[int]
+) -> int:
+    """Validate the gap/sum-intersection sampling controls and return the step limit."""
+    if (
+        isinstance(n_samples, (bool, np.bool_))
+        or not isinstance(n_samples, (int, np.integer))
+        or n_samples < 2
+    ):
+        raise ValueError("n_samples must be an integer of at least two")
+    if (
+        isinstance(b, (bool, np.bool_))
+        or not isinstance(b, (int, float, np.integer, np.floating))
+        or not np.isfinite(b)
+        or b <= 0.0
+    ):
+        raise ValueError("b must be finite and positive")
+    if max_steps is not None and (
+        isinstance(max_steps, (bool, np.bool_))
+        or not isinstance(max_steps, (int, np.integer))
+        or max_steps <= 0
+    ):
+        raise ValueError("max_steps must be a positive integer")
+    return 10 * int(b) + 1000 if max_steps is None else int(max_steps)
+
+
+def _simulate_gaussian_mixture(
+    cgf: CumulantFunction,
+    mixture_factory: Callable[[], Tuple[List[np.ndarray], List[float]]],
+    classify_exit: Callable[[np.ndarray], Optional[bool]],
+    n_samples: int,
+    rng: Optional[np.random.Generator],
+    step_limit: int,
+) -> SimulationResult:
+    """Sample a validated model with one Gaussian proposal component per path.
+
+    ``classify_exit`` returns None to continue, False for a correct exit, and
+    True for a wrong exit. Use the complete mixture density at stopping and
+    scaled moments for the estimate and sample standard error. No estimate is
+    returned if a path exceeds the validated positive step limit.
+    """
+    generator: np.random.Generator = rng if rng is not None else np.random.default_rng()
+    start_time: float = time.perf_counter()
+    tilts, weights = mixture_factory()
+    tilt_matrix: np.ndarray = np.asarray(tilts)
+    tilted_means: np.ndarray = cgf.mean + tilt_matrix @ cgf.cov.T
+    cumulants: np.ndarray = np.asarray([cgf.Lambda(theta) for theta in tilts])
+    log_weights: np.ndarray = np.log(weights)
+    log_contributions: np.ndarray = np.full(n_samples, -np.inf)
+
+    for sample_index in range(n_samples):
+        component: int = int(generator.choice(len(tilts), p=weights))
+        position: np.ndarray = np.zeros(cgf.d)
+        exit_decision: Optional[bool] = None
+        for n_steps in range(1, step_limit + 1):
+            position += generator.multivariate_normal(tilted_means[component], cgf.cov)
+            if not np.all(np.isfinite(position)):
+                raise RuntimeError("A simulated position became nonfinite")
+            exit_decision = classify_exit(position)
+            if exit_decision is not None:
+                break
+        else:
+            raise RuntimeError(
+                f"Sample {sample_index + 1} did not exit within max_steps={step_limit}. "
+                "Increase max_steps and rerun the simulation."
+            )
+
+        if exit_decision:
+            # This is the density of the entire path mixture, not only its draw.
+            log_ratio: float = -float(
+                logsumexp(log_weights + tilt_matrix @ position - n_steps * cumulants)
+            )
+            if not np.isfinite(log_ratio):
+                raise RuntimeError("A simulated path likelihood became nonfinite")
+            log_contributions[sample_index] = log_ratio
+
+    estimate: float = 0.0
+    std_error: float = 0.0
+    relative_error: float = float("inf")
+    log_probability: float = float("-inf")
+    largest_log: float = float(np.max(log_contributions))
+    if np.isfinite(largest_log):
+        # Scale before taking moments, retaining zero contributions in the sample.
+        with np.errstate(under="ignore", over="raise", invalid="raise"):
+            try:
+                scaled: np.ndarray = np.exp(log_contributions - largest_log)
+                scaled_mean: float = float(np.mean(scaled))
+                scaled_error: float = float(np.std(scaled, ddof=1) / np.sqrt(n_samples))
+                log_probability = largest_log + float(np.log(scaled_mean))
+                estimate = float(np.exp(log_probability))
+                relative_error = scaled_error / scaled_mean
+                if scaled_error > 0.0:
+                    std_error = float(np.exp(largest_log + np.log(scaled_error)))
+            except FloatingPointError as error:
+                raise RuntimeError("Simulation summary exceeded floating-point range") from error
+
+    return SimulationResult(
+        estimate=estimate,
+        std_error=std_error,
+        relative_error=relative_error,
+        samples_used=int(n_samples),
+        computation_time=time.perf_counter() - start_time,
+        log_probability=log_probability,
+    )
 
 
 class RegionOptimizer:
@@ -930,19 +1036,24 @@ class GapRule:
 
         Args:
             d: Total number of coordinates
-            m: Number of coordinates with positive drift (signals)
-            mean: Mean vector (first m positive, rest negative)
+            m: Number of true signals, indexed by the first m coordinates
+            mean: Mean vector; simulation requires every first-m drift to exceed
+                every remaining drift, allowing a common drift offset
             covariance: Covariance matrix
         """
-        if d < 2:
-            raise ValueError("d must be at least 2")
-        if not 1 <= m < d:
-            raise ValueError("m must satisfy 1 <= m < d")
+        if isinstance(d, (bool, np.bool_)) or not isinstance(d, (int, np.integer)) or d < 2:
+            raise ValueError("d must be at least 2 and an integer")
+        if (
+            isinstance(m, (bool, np.bool_))
+            or not isinstance(m, (int, np.integer))
+            or not 1 <= m < d
+        ):
+            raise ValueError("m must satisfy 1 <= m < d and be an integer")
         if len(mean) != d:
             raise ValueError("Mean vector dimension must equal d")
 
-        self.d = d
-        self.m = m
+        self.d = int(d)
+        self.m = int(m)
         self.cgf = CumulantFunction(mean, covariance)
         self.optimizer = RegionOptimizer(self.cgf)
 
@@ -966,7 +1077,9 @@ class GapRule:
 
     def compute_feasible_mixture(self) -> Tuple[List[np.ndarray], List[float]]:
         """
-        Compute feasible asymptotically efficient mixture for gap rule.
+        Construct the gap-rule region and pairwise auxiliary proposal families.
+
+        The sufficient efficiency conditions in Theorem 5.2 are not checked.
 
         Returns:
             (tilts, weights): Mixture components and weights
@@ -996,6 +1109,62 @@ class GapRule:
         weights = [1.0 / n_tilts] * n_tilts
 
         return all_tilts, weights
+
+    def simulate_wrong_exit_probability(
+        self,
+        b: float,
+        n_samples: int = 10000,
+        rng: Optional[np.random.Generator] = None,
+        *,
+        max_steps: Optional[int] = None,
+    ) -> SimulationResult:
+        """Estimate the probability of selecting an incorrect top-m coordinate set.
+
+        Stop when the m-th largest coordinate exceeds the next largest by more
+        than b, following the open regions in equation (35). A wrong selection
+        contains any index outside range(m). Signs of the terminal coordinates
+        do not determine this event. One component is drawn per path, and every
+        component enters its stopped-path mixture likelihood.
+
+        Args:
+            b: Finite positive gap threshold; equality does not stop a path.
+            n_samples: Integer at least two, needed for the sample variance.
+            rng: Optional generator for reproducible simulations.
+            max_steps: Positive per-path limit; defaults to 10*int(b) + 1000.
+
+        Returns:
+            SimulationResult with sample standard error (ddof=1) and a stable
+            log probability estimate. If no wrong selections occur, the estimate
+            and empirical standard error are zero, relative error is infinite,
+            and log_probability is negative infinity. These observations do not
+            establish a zero probability. Underflow of the ordinary estimate
+            does not erase the log probability or relative error.
+
+        Raises:
+            ValueError: If arguments are invalid or the first m drifts do not
+                strictly exceed all remaining drifts. A common offset is allowed.
+            RuntimeError: If a proposal fails, any path is unfinished at the
+                step limit, or numerical overflow invalidates the result.
+
+        The sufficient asymptotic efficiency conditions are not checked here.
+        """
+        step_limit: int = _validate_mixture_simulation_arguments(b, n_samples, max_steps)
+        if np.min(self.cgf.mean[: self.m]) <= np.max(self.cgf.mean[self.m :]):
+            raise ValueError("The first m coordinate drifts must strictly exceed all remaining drifts")
+
+        def classify_exit(position: np.ndarray) -> Optional[bool]:
+            # Partition retains identities; only the gap at the selection boundary matters.
+            order: np.ndarray = np.argpartition(position, self.d - self.m)
+            selected: np.ndarray = order[-self.m :]
+            unselected: np.ndarray = order[: -self.m]
+            gap: float = float(np.min(position[selected]) - np.max(position[unselected]))
+            if gap > b:
+                return bool(np.any(selected >= self.m))
+            return None
+
+        return _simulate_gaussian_mixture(
+            self.cgf, self.compute_feasible_mixture, classify_exit, n_samples, rng, step_limit
+        )
 
 
 class SumIntersectionRule:
@@ -1187,91 +1356,19 @@ class SumIntersectionRule:
 
         The method does not run the separate efficiency-condition diagnostic.
         """
-        if (
-            isinstance(n_samples, (bool, np.bool_))
-            or not isinstance(n_samples, (int, np.integer))
-            or n_samples < 2
-        ):
-            raise ValueError("n_samples must be an integer of at least two")
-        if (
-            isinstance(b, (bool, np.bool_))
-            or not isinstance(b, (int, float, np.integer, np.floating))
-            or not np.isfinite(b)
-            or b <= 0.0
-        ):
-            raise ValueError("b must be finite and positive")
-        if max_steps is not None and (
-            isinstance(max_steps, (bool, np.bool_))
-            or not isinstance(max_steps, (int, np.integer))
-            or max_steps <= 0
-        ):
-            raise ValueError("max_steps must be a positive integer")
+        step_limit: int = _validate_mixture_simulation_arguments(b, n_samples, max_steps)
         if np.any(self.cgf.mean >= 0.0):
             raise ValueError("Sum-intersection simulation requires strictly negative coordinate drifts")
 
-        step_limit: int = 10 * int(b) + 1000 if max_steps is None else int(max_steps)
-        generator: np.random.Generator = rng if rng is not None else np.random.default_rng()
-        start_time: float = time.perf_counter()
-        tilts, weights = self.compute_feasible_mixture()
-        tilt_matrix: np.ndarray = np.asarray(tilts)
-        tilted_means: np.ndarray = self.cgf.mean + tilt_matrix @ self.cgf.cov.T
-        cumulants: np.ndarray = np.asarray([self.cgf.Lambda(theta) for theta in tilts])
-        log_weights: np.ndarray = np.log(weights)
-        log_contributions: np.ndarray = np.full(n_samples, -np.inf)
+        def classify_exit(position: np.ndarray) -> Optional[bool]:
+            # Partition by absolute value; signed sorting gives a different rule.
+            smallest: np.ndarray = np.partition(np.abs(position), self.L - 1)[: self.L]
+            if float(np.sum(smallest)) > b:
+                return bool(np.count_nonzero(position > 0.0) >= self.L)
+            return None
 
-        for sample_index in range(n_samples):
-            component: int = int(generator.choice(len(tilts), p=weights))
-            position: np.ndarray = np.zeros(self.d)
-            for n_steps in range(1, step_limit + 1):
-                position += generator.multivariate_normal(tilted_means[component], self.cgf.cov)
-                if not np.all(np.isfinite(position)):
-                    raise RuntimeError("A simulated position became nonfinite")
-                # Partition by absolute value; signed sorting gives a different rule.
-                smallest: np.ndarray = np.partition(np.abs(position), self.L - 1)[: self.L]
-                if float(np.sum(smallest)) > b:
-                    break
-            else:
-                raise RuntimeError(
-                    f"Sample {sample_index + 1} did not exit within max_steps={step_limit}. "
-                    "Increase max_steps and rerun the simulation."
-                )
-
-            if np.count_nonzero(position > 0.0) >= self.L:
-                # This is the density of the entire path mixture, not only its draw.
-                log_ratio: float = -float(
-                    logsumexp(log_weights + tilt_matrix @ position - n_steps * cumulants)
-                )
-                if not np.isfinite(log_ratio):
-                    raise RuntimeError("A simulated path likelihood became nonfinite")
-                log_contributions[sample_index] = log_ratio
-
-        estimate: float = 0.0
-        std_error: float = 0.0
-        relative_error: float = float("inf")
-        log_probability: float = float("-inf")
-        largest_log: float = float(np.max(log_contributions))
-        if np.isfinite(largest_log):
-            # Scale before taking moments, retaining zero contributions in the sample.
-            with np.errstate(under="ignore", over="raise", invalid="raise"):
-                try:
-                    scaled: np.ndarray = np.exp(log_contributions - largest_log)
-                    scaled_mean: float = float(np.mean(scaled))
-                    scaled_error: float = float(np.std(scaled, ddof=1) / np.sqrt(n_samples))
-                    log_probability = largest_log + float(np.log(scaled_mean))
-                    estimate = float(np.exp(log_probability))
-                    relative_error = scaled_error / scaled_mean
-                    if scaled_error > 0.0:
-                        std_error = float(np.exp(largest_log + np.log(scaled_error)))
-                except FloatingPointError as error:
-                    raise RuntimeError("Simulation summary exceeded floating-point range") from error
-
-        return SimulationResult(
-            estimate=estimate,
-            std_error=std_error,
-            relative_error=relative_error,
-            samples_used=int(n_samples),
-            computation_time=time.perf_counter() - start_time,
-            log_probability=log_probability,
+        return _simulate_gaussian_mixture(
+            self.cgf, self.compute_feasible_mixture, classify_exit, n_samples, rng, step_limit
         )
 
 
@@ -1346,6 +1443,8 @@ def run_comprehensive_example(
     tilts, weights = gap_rule.compute_feasible_mixture()
     print(f"Feasible mixture components: {len(tilts)}")
     print(f"Theoretical complexity: O(m(d-m)) = O({m_gap * (d_gap - m_gap)})")
+    result_gap = gap_rule.simulate_wrong_exit_probability(2.0, n_samples=1000, rng=generator)
+    print(f"Wrong selection estimate: {result_gap.estimate:.2e} ± {result_gap.std_error:.2e} (SE)")
 
     # Example 3: Sum-Intersection Rule
     print("\n3. Sum-Intersection Rule")
@@ -1420,4 +1519,4 @@ if __name__ == "__main__":
         else:
             print(f"    {d}     |    {times_feasible[i]:.3f}s     |    N/A    |   N/A")
 
-    print("\n✓ Implementation complete with all theoretical guarantees!")
+    print("\n✓ Completed demonstrations for all three stopping rules")
