@@ -1,12 +1,13 @@
 """
-Complete implementation of efficient importance sampling for wrong exit probabilities
+Gaussian importance sampling for wrong exit probabilities
 with combinatorially many rare regions, based on Song & Fellouris (2025).
 
-This implements the full mathematical framework including:
+This implements Gaussian proposal construction and simulation tools for:
 - Multidimensional Siegmund problem (Section 4)
 - Gap rule from sequential multiple testing (Section 5)
 - Sum-intersection rule (Section 6)
-- All optimization procedures and asymptotic efficiency guarantees
+
+The paper's asymptotic efficiency conditions require separate verification.
 """
 
 import numpy as np
@@ -406,6 +407,49 @@ class RegionOptimizer:
             raise ValueError("A sum-intersection region must contain at least L coordinates")
         if L == 1:
             return self._solve_siegmund_region(A_indices, u=1.0, ell=1.0)
+        return self._solve_sum_intersection_program(signs, L)
+
+    def solve_sum_intersection_auxiliary(
+        self, A_indices: List[int]
+    ) -> Tuple[np.ndarray, float]:
+        """Compute the supported auxiliary tilt and value in equation (43).
+
+        Maximise min(theta[A]) subject to Lambda(theta) <= 0, theta[A] >= 0,
+        and theta outside A equal to zero. Restricting the Gaussian to its
+        principal submodel enforces the support exactly. In that submodel the
+        full-order sum-intersection objective equals the minimum coordinate.
+
+        Args:
+            A_indices: Nonempty subset of distinct model coordinate indices.
+
+        Returns:
+            The full-dimensional auxiliary tilt and its minimum selected value.
+
+        Raises:
+            ValueError: If the coordinate subset is invalid.
+            RuntimeError: If the numerical candidate cannot be validated.
+        """
+        self._region_signs(A_indices)
+        indices: np.ndarray = np.asarray(A_indices, dtype=int)
+        restricted: CumulantFunction = CumulantFunction(
+            self.cgf.mean[indices], self.cgf.cov[np.ix_(indices, indices)]
+        )
+        if indices.size == 1:
+            # A singleton auxiliary problem has the exact Gaussian ray solution.
+            supported_tilt: np.ndarray = restricted.optimal_ray_tilt(np.ones(1))
+            value: float = float(supported_tilt[0])
+        else:
+            supported_tilt, value = RegionOptimizer(restricted)._solve_sum_intersection_program(
+                np.ones(indices.size), int(indices.size)
+            )
+        theta: np.ndarray = np.zeros(self.d)
+        theta[indices] = supported_tilt
+        return theta, value
+
+    def _solve_sum_intersection_program(
+        self, signs: np.ndarray, L: int
+    ) -> Tuple[np.ndarray, float]:
+        """Solve a validated orthant programme, including full-order auxiliary problems."""
         if np.all(signs * self.cgf.mean >= 0.0):
             return np.zeros(self.d), 0.0
 
@@ -913,39 +957,30 @@ class SumIntersectionRule:
 
     def compute_feasible_mixture(self) -> Tuple[List[np.ndarray], List[float]]:
         """
-        Compute feasible mixture for sum-intersection rule.
+        Construct the sum-intersection proposal family in Theorem 6.2.
 
-        This currently combines size-L and at most 100 size-(L+1) region tilts.
-        It does not construct the auxiliary family required by Theorem 6.2.
+        Include every size-L region tilt followed by every size-L auxiliary tilt
+        from equation (43), in lexicographic subset order. All 2*binom(d, L)
+        component slots have equal weights; coincident tilts retain their slots.
+        The sufficient efficiency condition (H-SI) is not checked by this method.
 
         Returns:
             (tilts, weights): Mixture components and weights
         """
-        # Generate all size-L subsets
-        subsets_L = list(itertools.combinations(range(self.d), self.L))
+        region_tilts: List[np.ndarray] = []
+        auxiliary_tilts: List[np.ndarray] = []
 
-        tilts = []
-
-        # Optimal tilts for size-L subsets
-        for subset in subsets_L:
+        # Stream subsets while collecting the two complete proposal families.
+        for subset in itertools.combinations(range(self.d), self.L):
+            indices = list(subset)
             constraints = {"sum_intersection": {"L": self.L}}
-            beta, rate = self.optimizer.solve_kkt_system(list(subset), constraints)
-            tilts.append(beta)
+            beta, _ = self.optimizer.solve_kkt_system(indices, constraints)
+            gamma, _ = self.optimizer.solve_sum_intersection_auxiliary(indices)
+            region_tilts.append(beta)
+            auxiliary_tilts.append(gamma)
 
-        # Legacy component selection: extra regions, not the auxiliary family (43).
-        subsets_L_plus_1 = list(itertools.combinations(range(self.d), self.L + 1))
-
-        for subset in subsets_L_plus_1[
-            : min(100, len(subsets_L_plus_1))
-        ]:  # Limit for efficiency
-            # Solve the region problem from Lemma 6.1 for this larger subset.
-            constraints = {"sum_intersection": {"L": self.L}}
-            beta, rate = self.optimizer.solve_kkt_system(list(subset), constraints)
-            tilts.append(beta)
-
-        # Equal weights
-        n_tilts = len(tilts)
-        weights = [1.0 / n_tilts] * n_tilts
+        tilts: List[np.ndarray] = region_tilts + auxiliary_tilts
+        weights: List[float] = [1.0 / len(tilts)] * len(tilts)
 
         return tilts, weights
 
@@ -1037,12 +1072,12 @@ def run_comprehensive_example(
 
     tilts_si, weights_si = sum_int.compute_feasible_mixture()
     print(f"Feasible mixture components: {len(tilts_si)}")
-    print(f"Full complexity would be: {2**d_si - sum(1 for k in range(L_si))} regions")
+    print("Includes every size-L region tilt and every size-L auxiliary tilt")
 
     print("\n=== Summary ===")
-    print("✓ All three problems implemented with asymptotic efficiency guarantees")
-    print("✓ Computational complexity reduced from exponential to polynomial")
-    print("✓ Variance control achieved through strategic mixture construction")
+    print("✓ Region and auxiliary proposal families constructed for all three problems")
+    print("✓ Sum-intersection mixture has 2*binom(d, L) component slots")
+    print("Efficiency conditions, including (H-SI), require separate verification")
 
     return siegmund, gap_rule, sum_int
 

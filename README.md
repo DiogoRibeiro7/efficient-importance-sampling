@@ -2,11 +2,11 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A complete implementation of efficient importance sampling techniques for estimating wrong exit probabilities in systems with combinatorially many rare regions, based on **Song & Fellouris (2025)**.
+A Gaussian implementation of importance sampling techniques for estimating wrong exit probabilities in systems with combinatorially many rare regions, based on **Song & Fellouris (2025)**.
 
 ## Overview
 
-This package provides asymptotically efficient Monte Carlo methods for rare event simulation in high-dimensional settings where:
+This package constructs importance sampling proposals for rare event simulation in high-dimensional settings where:
 
 - Events of interest are exponentially rare (probability ~ e^(-αb) as b → ∞)
 - The number of rare regions grows combinatorially with dimension
@@ -14,7 +14,7 @@ This package provides asymptotically efficient Monte Carlo methods for rare even
 
 ### Key Innovation
 
-Instead of using exponentially many (2^d) mixture components, this implementation achieves **asymptotic efficiency** with only **polynomially many** components through strategic mixture construction.
+Selected region and auxiliary tilts reduce the number of mixture components. The paper establishes asymptotic efficiency under problem-specific conditions; constructing the proposals alone does not verify those conditions.
 
 ## Features
 
@@ -40,7 +40,7 @@ Handles stopping rules based on sums of smallest coordinates with decreasing rea
 
 **Application**: Rank-based sequential tests, order statistics
 
-**Complexity Reduction**: Exponential → Polynomial
+**Mixture size**: $2\binom{d}{L}$ component slots, polynomial in $d$ when $L$ is fixed.
 
 ## Mathematical Framework
 
@@ -48,9 +48,12 @@ The implementation includes:
 
 - ✅ Cumulant generating functions (CGFs) and rate functions
 - ✅ KKT system solvers for optimal exponential tilts
-- ✅ Feasible mixture construction with theoretical guarantees
-- ✅ Variance control through strategic coverage
-- ✅ Asymptotic efficiency proofs (Theorems 4.2, 5.1, 6.1)
+- ✅ Region and auxiliary proposal families
+- ✅ Numerical feasibility and optimality checks for Gaussian tilts
+
+The paper supplies the asymptotic efficiency results and their assumptions. In
+particular, the sum-intersection mixture builder does not check condition (H-SI)
+from Theorem 6.2.
 
 ## Installation
 
@@ -147,6 +150,7 @@ sum_int = SumIntersectionRule(
 )
 
 tilts, weights = sum_int.compute_feasible_mixture()
+print(f"Mixture components: {len(tilts)}")  # 20 = 2 * binom(5, 2)
 ```
 
 ## Running the Demo
@@ -160,7 +164,9 @@ This will run comprehensive examples for all three problems with:
 - Performance comparisons (feasible vs. full mixture)
 - Scaling analysis across dimensions
 - Timing benchmarks
-- Verification of asymptotic efficiency
+- Construction of region and auxiliary proposal families
+
+These numerical examples do not verify the paper's asymptotic efficiency conditions.
 
 ## Algorithm Details
 
@@ -184,11 +190,11 @@ For a rare event `E_b = ∪_{A⊆[d]} W^A_b` (union of exponentially many region
   minimize r_A subject to Λ(β^A) = 0, sign constraints
   ```
 
-2. **Strategic selection**: Choose O(poly(d)) components instead of O(2^d)
+2. **Strategic selection**: Choose the region family for the stopping rule
 
 3. **Additional coverage**: Add auxiliary tilts γ^k for variance control
 
-4. **Theoretical guarantee**: Achieves asymptotic efficiency despite reduced complexity
+4. **Efficiency conditions**: Check the relevant theorem's assumptions separately
 
 ### Gaussian Siegmund region tilts
 
@@ -266,10 +272,34 @@ variables without enumerating all size-$L$ subsets inside each region solve.
 Returned candidates pass feasibility and an independent dual optimality check.
 Invalid candidates raise `RuntimeError`; unknown region types raise `ValueError`.
 
-The current `SumIntersectionRule.compute_feasible_mixture` still selects size-$L$
-and up to 100 size-$(L+1)$ region tilts. It does not yet construct the auxiliary
-family in equation (43) required by Theorem 6.2, so that theorem's efficiency
-guarantee does not apply to the current mixture builder.
+### Sum-intersection auxiliary tilts and mixture
+
+For every size-$L$ subset $A$, equation (43) defines an auxiliary tilt by
+
+$$
+\max_\theta\min_{i\in A}\theta_i
+\quad\text{subject to}\quad
+\Lambda(\theta)\leq0,\qquad
+\theta_i\geq0\ (i\in A),\qquad
+\theta_i=0\ (i\notin A).
+$$
+
+`RegionOptimizer.solve_sum_intersection_auxiliary(A_indices)` solves this problem
+on the selected coordinates' Gaussian mean and principal covariance submatrix.
+The full-order region objective on that submodel is exactly the minimum selected
+coordinate. Singleton subsets use the exact Gaussian ray solution. The returned
+tilt has zeros outside $A$; its selected coordinates need not be equal.
+
+`SumIntersectionRule.compute_feasible_mixture` constructs all size-$L$ region
+tilts followed by all size-$L$ auxiliary tilts, each family in lexicographic
+subset order. It returns exactly $2\binom{d}{L}$ equally weighted component slots,
+retaining coincident tilts and imposing no subset cap. At $L=1$ the construction
+agrees with the unit-boundary Siegmund mixture.
+
+This is the proposal family in
+[Theorem 6.2 of Song and Fellouris (2025)](https://arxiv.org/html/2509.14596v1).
+The builder does **not** evaluate the theorem's sufficient condition (H-SI), so
+asymptotic efficiency still requires a separate check for the chosen model.
 
 ### Gaussian auxiliary tilts
 
@@ -317,6 +347,11 @@ Handles cumulant generating functions and rate functions for multivariate normal
 Computes region tilts and rates using convex constrained solvers with independent
 feasibility and optimality checks.
 
+`solve_sum_intersection_auxiliary(A_indices)` returns a full-dimensional supported
+tilt and its minimum selected coordinate. Indices must be a nonempty subset of
+distinct valid coordinates. Invalid input raises `ValueError`; an unvalidated
+numerical candidate raises `RuntimeError`.
+
 #### `MultidimensionalSiegmund`
 
 Implements the multidimensional Siegmund problem with boundary crossings.
@@ -363,11 +398,11 @@ Using all `2^d - 1` optimal tilts:
 
 ### The Solution
 
-Carefully selected subset of O(poly(d)) tilts:
+Carefully selected region and auxiliary tilts:
 
-- ✅ Maintains asymptotic efficiency
-- ✅ Polynomial computational complexity
-- ✅ Controlled variance through coverage guarantees
+- Asymptotic efficiency when the applicable theorem's conditions hold
+- $2\binom{d}{L}$ components for the sum-intersection rule, polynomial for fixed $L$
+- Coverage conditions that must be checked for the chosen model
 
 ## Citation
 
