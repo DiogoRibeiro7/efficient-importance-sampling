@@ -118,6 +118,32 @@ class CumulantFunction:
         scale = np.sqrt(mean_norm_squared / point_norm_squared)
         return -precision_mean + scale * precision_point
 
+    def optimal_ray_tilt(self, direction: np.ndarray) -> np.ndarray:
+        """Return the furthest feasible tilt on the ray t*direction, t >= 0.
+
+        For a Gaussian CGF, Lambda(t*v) = t*(mean @ v) + t**2*(v @ cov @ v)/2.
+        If the projected drift is negative, the nonzero root is
+        t = -2*(mean @ v)/(v @ cov @ v). Otherwise only the origin is feasible.
+        A zero direction also returns the zero vector.
+
+        Args:
+            direction: Finite vector with the same dimension as the Gaussian mean.
+
+        Returns:
+            The boundary tilt along the requested ray, without a search interval.
+
+        Raises:
+            ValueError: If the direction has the wrong shape or non-finite entries.
+        """
+        vector: np.ndarray = self._validate_point(direction)
+        projected_drift: float = float(self.mean @ vector)
+        if projected_drift >= 0.0:
+            return np.zeros(self.d)
+
+        projected_variance: float = float(vector @ self.cov @ vector)
+        scale: float = -2.0 * projected_drift / projected_variance
+        return scale * vector
+
 
 class RegionOptimizer:
     """Handles optimization problems for computing optimal tilts and rates."""
@@ -361,24 +387,10 @@ class MultidimensionalSiegmund:
         # Additional tilts γ^k from equation (27)
         additional_tilts = []
         for k in range(self.d):
-            # Solve: max u*θ_k subject to Λ(θ) ≤ 0, θ_k ≥ 0, θ_{k'} = 0 for k' ≠ k
-            def objective(theta_k_val: Union[np.ndarray, float]) -> float:
-                value = (
-                    float(theta_k_val[0])
-                    if isinstance(theta_k_val, np.ndarray)
-                    else float(theta_k_val)
-                )
-                theta = np.zeros(self.d)
-                theta[k] = value
-                if self.cgf.Lambda(theta) <= 1e-10 and value >= 0:
-                    return -self.u * value
-                return 1e10
-
-            result = opt.minimize_scalar(objective, bounds=(0, 10), method="bounded")
-            if result.success:
-                gamma_k = np.zeros(self.d)
-                gamma_k[k] = result.x
-                additional_tilts.append(gamma_k)
+            # Since u > 0, maximise the feasible scale along coordinate k.
+            direction = np.zeros(self.d)
+            direction[k] = 1.0
+            additional_tilts.append(self.cgf.optimal_ray_tilt(direction))
 
         # Combine tilts
         all_tilts = singleton_tilts + additional_tilts
@@ -603,24 +615,11 @@ class GapRule:
         additional_tilts = []
         for ell in range(self.m):
             for ell_prime in range(self.m, self.d):
-                # Solve optimization problem (36)
-                def objective(params: np.ndarray) -> float:
-                    theta = np.zeros(self.d)
-                    theta[ell] = -params[0]  # θ_ℓ ≤ 0
-                    theta[ell_prime] = params[0]  # θ_ℓ' ≥ 0
-
-                    if self.cgf.Lambda(theta) <= 1e-10:
-                        return -theta[ell_prime]  # Maximize θ_ℓ'
-                    return 1e10
-
-                result = opt.minimize_scalar(
-                    objective, bounds=(0, 10), method="bounded"
-                )
-                if result.success:
-                    gamma = np.zeros(self.d)
-                    gamma[ell] = -result.x
-                    gamma[ell_prime] = result.x
-                    additional_tilts.append(gamma)
+                # Equal and opposite coordinates enforce the gap constraint (36).
+                direction = np.zeros(self.d)
+                direction[ell] = -1.0
+                direction[ell_prime] = 1.0
+                additional_tilts.append(self.cgf.optimal_ray_tilt(direction))
 
         # Combine all tilts
         all_tilts = region_tilts + additional_tilts
