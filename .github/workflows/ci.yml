@@ -51,23 +51,18 @@ jobs:
           fail_ci_if_error: false
 
   security:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install project
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-
-      - name: Audit source
-        run: bandit -q -r src/efficient_importance_sampling
-
-      - name: Audit dependencies
-        run: pip-audit
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+      attestations: write
+    uses: DiogoRibeiro7/git-actions-collection/.github/workflows/security-scan.yml@e75a49ca4b99f959e84b8406091fee3e6a317656 # v1.2.1
+    with:
+      paths: src/efficient_importance_sampling
+      dependency-install-command: python -m pip install -e ".[dev]"
+      pip-version: latest
+      bandit-args: "-q"
+      skip-trivy: true
+      skip-npm-signatures: true
+      skip-java-verify: true
+      skip-go-verify: true
