@@ -56,7 +56,7 @@ jobs:
       security-events: write
       id-token: write
       attestations: write
-    uses: DiogoRibeiro7/git-actions-collection/.github/workflows/security-scan.yml@7c8ac767685d40f3f4e80846842d6e9ad645b323 # v1.2.0
+    uses: DiogoRibeiro7/git-actions-collection/.github/workflows/security-scan.yml@e75a49ca4b99f959e84b8406091fee3e6a317656 # v1.2.1
     with:
       paths: src/efficient_importance_sampling
       dependency-install-command: python -m pip install -e ".[dev]"
