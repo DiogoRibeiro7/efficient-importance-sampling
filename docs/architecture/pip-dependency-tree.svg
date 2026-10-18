@@ -287,7 +287,7 @@
 <title>distlib</title>
 <ellipse fill="none" stroke="black" cx="3365.84" cy="-341.09" rx="43.68" ry="26.74"/>
 <text text-anchor="middle" x="3365.84" y="-344.89" font-family="Times,serif" font-size="14.00">distlib</text>
-<text text-anchor="middle" x="3365.84" y="-329.89" font-family="Times,serif" font-size="14.00">0.4.3</text>
+<text text-anchor="middle" x="3365.84" y="-329.89" font-family="Times,serif" font-size="14.00">0.4.4</text>
 </g>
 <!-- dulwich -->
 <g id="node26" class="node">
@@ -322,7 +322,7 @@
 <title>sqlalchemy</title>
 <ellipse fill="none" stroke="black" cx="908.84" cy="-341.09" rx="68.68" ry="26.74"/>
 <text text-anchor="middle" x="908.84" y="-344.89" font-family="Times,serif" font-size="14.00">sqlalchemy</text>
-<text text-anchor="middle" x="908.84" y="-329.89" font-family="Times,serif" font-size="14.00">2.1.4</text>
+<text text-anchor="middle" x="908.84" y="-329.89" font-family="Times,serif" font-size="14.00">2.1.5</text>
 </g>
 <!-- eralchemy2&#45;&gt;sqlalchemy -->
 <g id="edge13" class="edge">
@@ -364,7 +364,7 @@
 <title>filelock</title>
 <ellipse fill="none" stroke="black" cx="3141.84" cy="-236.35" rx="47.25" ry="26.74"/>
 <text text-anchor="middle" x="3141.84" y="-240.15" font-family="Times,serif" font-size="14.00">filelock</text>
-<text text-anchor="middle" x="3141.84" y="-225.15" font-family="Times,serif" font-size="14.00">4.1.0</text>
+<text text-anchor="middle" x="3141.84" y="-225.15" font-family="Times,serif" font-size="14.00">4.2.1</text>
 </g>
 <!-- findpython -->
 <g id="node33" class="node">
@@ -385,7 +385,7 @@
 <title>platformdirs</title>
 <ellipse fill="none" stroke="black" cx="3720.84" cy="-341.09" rx="74.91" ry="26.74"/>
 <text text-anchor="middle" x="3720.84" y="-344.89" font-family="Times,serif" font-size="14.00">platformdirs</text>
-<text text-anchor="middle" x="3720.84" y="-329.89" font-family="Times,serif" font-size="14.00">4.13.0</text>
+<text text-anchor="middle" x="3720.84" y="-329.89" font-family="Times,serif" font-size="14.00">4.13.4</text>
 </g>
 <!-- findpython&#45;&gt;platformdirs -->
 <g id="edge16" class="edge">
@@ -497,7 +497,7 @@
 <title>installer</title>
 <ellipse fill="none" stroke="black" cx="444.84" cy="-445.83" rx="53.98" ry="26.74"/>
 <text text-anchor="middle" x="444.84" y="-449.63" font-family="Times,serif" font-size="14.00">installer</text>
-<text text-anchor="middle" x="444.84" y="-434.63" font-family="Times,serif" font-size="14.00">1.0.1</text>
+<text text-anchor="middle" x="444.84" y="-434.63" font-family="Times,serif" font-size="14.00">1.1.0</text>
 </g>
 <!-- isort -->
 <g id="node43" class="node">
@@ -518,7 +518,7 @@
 <title>more&#45;itertools</title>
 <ellipse fill="none" stroke="black" cx="2297.84" cy="-236.35" rx="83.38" ry="26.74"/>
 <text text-anchor="middle" x="2297.84" y="-240.15" font-family="Times,serif" font-size="14.00">more&#45;itertools</text>
-<text text-anchor="middle" x="2297.84" y="-225.15" font-family="Times,serif" font-size="14.00">11.1.0</text>
+<text text-anchor="middle" x="2297.84" y="-225.15" font-family="Times,serif" font-size="14.00">11.2.1</text>
 </g>
 <!-- jaraco.classes&#45;&gt;more&#45;itertools -->
 <g id="edge24" class="edge">
@@ -677,7 +677,7 @@
 <title>pbs&#45;installer</title>
 <ellipse fill="none" stroke="black" cx="591.84" cy="-445.83" rx="74.91" ry="26.74"/>
 <text text-anchor="middle" x="591.84" y="-449.63" font-family="Times,serif" font-size="14.00">pbs&#45;installer</text>
-<text text-anchor="middle" x="591.84" y="-434.63" font-family="Times,serif" font-size="14.00">2026.10.3</text>
+<text text-anchor="middle" x="591.84" y="-434.63" font-family="Times,serif" font-size="14.00">2026.10.13</text>
 </g>
 <!-- pip -->
 <g id="node57" class="node">
@@ -698,14 +698,14 @@
 <title>pkginfo</title>
 <ellipse fill="none" stroke="black" cx="864.84" cy="-445.83" rx="49.49" ry="26.74"/>
 <text text-anchor="middle" x="864.84" y="-449.63" font-family="Times,serif" font-size="14.00">pkginfo</text>
-<text text-anchor="middle" x="864.84" y="-434.63" font-family="Times,serif" font-size="14.00">1.13</text>
+<text text-anchor="middle" x="864.84" y="-434.63" font-family="Times,serif" font-size="14.00">1.13.3</text>
 </g>
 <!-- pluggy -->
 <g id="node60" class="node">
 <title>pluggy</title>
 <ellipse fill="none" stroke="black" cx="4898.84" cy="-341.09" rx="45.92" ry="26.74"/>
 <text text-anchor="middle" x="4898.84" y="-344.89" font-family="Times,serif" font-size="14.00">pluggy</text>
-<text text-anchor="middle" x="4898.84" y="-329.89" font-family="Times,serif" font-size="14.00">1.6.0</text>
+<text text-anchor="middle" x="4898.84" y="-329.89" font-family="Times,serif" font-size="14.00">1.7.0</text>
 </g>
 <!-- poetry -->
 <g id="node61" class="node">
@@ -859,7 +859,7 @@
 <title>tomlkit</title>
 <ellipse fill="none" stroke="black" cx="3923.84" cy="-445.83" rx="48.17" ry="26.74"/>
 <text text-anchor="middle" x="3923.84" y="-449.63" font-family="Times,serif" font-size="14.00">tomlkit</text>
-<text text-anchor="middle" x="3923.84" y="-434.63" font-family="Times,serif" font-size="14.00">0.15.1</text>
+<text text-anchor="middle" x="3923.84" y="-434.63" font-family="Times,serif" font-size="14.00">0.15.2</text>
 </g>
 <!-- poetry&#45;&gt;tomlkit -->
 <g id="edge51" class="edge">
@@ -887,7 +887,7 @@
 <title>virtualenv</title>
 <ellipse fill="none" stroke="black" cx="3211.84" cy="-445.83" rx="62.87" ry="26.74"/>
 <text text-anchor="middle" x="3211.84" y="-449.63" font-family="Times,serif" font-size="14.00">virtualenv</text>
-<text text-anchor="middle" x="3211.84" y="-434.63" font-family="Times,serif" font-size="14.00">21.14.6</text>
+<text text-anchor="middle" x="3211.84" y="-434.63" font-family="Times,serif" font-size="14.00">21.14.10</text>
 </g>
 <!-- poetry&#45;&gt;virtualenv -->
 <g id="edge53" class="edge">
@@ -936,7 +936,7 @@
 <title>python&#45;discovery</title>
 <ellipse fill="none" stroke="black" cx="3074.84" cy="-341.09" rx="98.08" ry="26.74"/>
 <text text-anchor="middle" x="3074.84" y="-344.89" font-family="Times,serif" font-size="14.00">python&#45;discovery</text>
-<text text-anchor="middle" x="3074.84" y="-329.89" font-family="Times,serif" font-size="14.00">1.6.2</text>
+<text text-anchor="middle" x="3074.84" y="-329.89" font-family="Times,serif" font-size="14.00">1.6.3</text>
 </g>
 <!-- virtualenv&#45;&gt;python&#45;discovery -->
 <g id="edge83" class="edge">
